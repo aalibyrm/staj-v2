@@ -33,17 +33,17 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | IN_PROGRESS | P00-W04: immutable global platform state uses readonly Angular Signals/computed values while typed cross-cutting events use RxJS; feature stores and async workflows remain assigned to later packets. |
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | Phase 00 exit review: deterministic mock latency, service failure, unauthorized, conflict, and selective retry scenarios remain covered in the 32-test passing suite. |
-| TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | TODO | - |
+| TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | IN_PROGRESS | P01-W04: reusable search, repeated multi-filter, sort, and page controls round-trip through URL state; server-backed pagination/list simulation remains feature work. |
 | TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01-W03: separate deny-by-default policies feed canMatch guards and capability-derived menus; menus complement rather than replace route enforcement. Row filtering remains P01-W05. |
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
 | TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | Phase 00 exit review: 32 tests cover routing, mock transport/errors, Signals state/events, storage fallback, and relational seed invariants; feature business-rule coverage follows later packets. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
-| TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | IN_PROGRESS | P01-W03: labeled navigation/account controls, aria-current, textual connectivity, visible focus, drawer focus entry, Escape close, and trigger restoration passed component/live checks; feature screens remain later phases. |
-| TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | IN_PROGRESS | P01-W03: 1440x900 desktop sidebar/topbar and 390x844 drawer shell passed without overflow; feature screen responsive layouts remain later packets. |
+| TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | IN_PROGRESS | P01-W03/W04: shell plus uniquely labeled request/list controls cover keyboard-native operation, focus, ARIA live/alert/busy semantics, retry actions, active-route cues, and non-color state text; feature screens remain later phases. |
+| TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | IN_PROGRESS | P01-W03/W04: shell and list/state patterns passed 1440x900 desktop and 390x844 narrow browser gates without overflow; feature screen layouts remain later packets. |
 | TECH-14 | See 02-architecture-and-technical.md TECH-14 | P00-P08 | VERIFIED | P01-W02: all 16 product routes use canMatch before lazy components; denied loader non-invocation, public unauthorized routing, return URLs, and separate lazy chunks passed 55 tests/build. |
-| TECH-15 | See 02-architecture-and-technical.md TECH-15 | P00-P08 | TODO | - |
+| TECH-15 | See 02-architecture-and-technical.md TECH-15 | P00-P08 | IN_PROGRESS | P01-W04: URL-source-of-truth codec/facade synchronizes search, repeated filters, sort, and page; live browser history restored controls. Table/chart/report adoption remains feature work. |
 | CMP-01 | See 02-architecture-and-technical.md CMP-01 | P02-P07 | TODO | - |
 | CMP-02 | See 02-architecture-and-technical.md CMP-02 | P02-P07 | TODO | - |
 | CMP-03 | See 02-architecture-and-technical.md CMP-03 | P02-P07 | TODO | - |
@@ -79,7 +79,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-08 | See 04-acceptance-and-delivery.md AC-08 | P02-P08 | TODO | - |
 | AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | IN_PROGRESS | P01-W01-W03: six-role decisions, direct-route enforcement, exact role-aware menus, and account switching to a permitted dashboard verified; filtered datasets remain P01-W05. |
 | AC-10 | See 04-acceptance-and-delivery.md AC-10 | P02-P08 | TODO | - |
-| AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | IN_PROGRESS | P01-W02/W03: safe public unauthorized behavior now renders inside the responsive desktop/narrow shell; loading/slow/empty/error/retry patterns remain P01-W04. |
+| AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | IN_PROGRESS | P01-W02-W04: reusable loading, empty, slow, error/retry, and unauthorized patterns plus responsive public denial and Courses empty-state demonstration passed tests/UI gates; main feature screens remain later phases. |
 | AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |
 | AC-13 | See 04-acceptance-and-delivery.md AC-13 | P02-P08 | TODO | - |
 | AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | VERIFIED | Phase 00 exit review: production build passed at 227.95 kB initial size; live startup redirected correctly with no console/page errors. |

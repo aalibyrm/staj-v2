@@ -1,9 +1,13 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 
+import { ListQueryControlsComponent, type ListFilterOption, type ListSortOption } from './list-query-controls.component';
+import { RequestStateComponent } from './request-state.component';
+
 @Component({
   selector: 'app-route-placeholder',
   standalone: true,
+  imports: [ListQueryControlsComponent, RequestStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <section class="placeholder-page" aria-labelledby="route-placeholder-heading">
@@ -12,10 +16,24 @@ import { ActivatedRoute } from '@angular/router';
         <h1 id="route-placeholder-heading">{{ title }}</h1>
       </header>
       <p class="later-packet-message">This route is reserved for a later packet.</p>
-      <div class="placeholder-surface" aria-label="Reserved feature area">
-        <span class="surface-mark" aria-hidden="true"></span>
-        <span>Feature content will be introduced in a later packet.</span>
-      </div>
+      @if (isCoursesRoute) {
+        <div class="courses-pattern" aria-label="Course list query demonstration">
+          <app-list-query-controls
+            [filterOptions]="courseFilterOptions"
+            [sortOptions]="courseSortOptions"
+          />
+          <app-request-state
+            state="empty"
+            title="No course records yet"
+            message="Course records arrive in the later domain packet."
+          />
+        </div>
+      } @else {
+        <div class="placeholder-surface" aria-label="Reserved feature area">
+          <span class="surface-mark" aria-hidden="true"></span>
+          <span>Feature content will be introduced in a later packet.</span>
+        </div>
+      }
     </section>
   `,
   styles: [`
@@ -48,6 +66,12 @@ import { ActivatedRoute } from '@angular/router';
     .later-packet-message {
       max-width: 56rem;
       color: var(--ui-text-muted);
+    }
+
+    .courses-pattern {
+      display: grid;
+      gap: 16px;
+      min-width: 0;
     }
 
     .placeholder-surface {
@@ -87,4 +111,17 @@ import { ActivatedRoute } from '@angular/router';
 export class RoutePlaceholderComponent {
   private readonly route = inject(ActivatedRoute);
   readonly title = String(this.route.snapshot.data['title'] ?? 'Reserved route');
+  readonly isCoursesRoute = this.route.snapshot.routeConfig?.path === 'courses';
+
+  readonly courseFilterOptions = [
+    { value: 'active', label: 'Active' },
+    { value: 'planned', label: 'Planned' },
+    { value: 'archived', label: 'Archived' }
+  ] as const satisfies readonly ListFilterOption[];
+
+  readonly courseSortOptions = [
+    { value: 'name-asc', label: 'Name, ascending' },
+    { value: 'name-desc', label: 'Name, descending' },
+    { value: 'updated-desc', label: 'Updated, newest first' }
+  ] as const satisfies readonly ListSortOption[];
 }
