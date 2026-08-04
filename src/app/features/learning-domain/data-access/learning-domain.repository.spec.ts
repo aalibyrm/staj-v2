@@ -73,4 +73,42 @@ describe('LearningDomainRepository', () => {
     await expect(firstValueFrom(repository.listCourses())).rejects.toMatchObject({ kind: 'conflict' });
     expect(repository.getSnapshot()).toEqual(before);
   });
+
+  it('rejects cyclic outcome updates before mutating outcomes or course versions', async () => {
+    const repository = new LearningDomainRepository(new MockTransport());
+    const before = repository.getSnapshot();
+
+    await expect(
+      firstValueFrom(
+        repository.updateOutcome('outcome-foundations-models' as LearningOutcomeId, {
+          prerequisiteOutcomeIds: ['outcome-foundations-analysis' as LearningOutcomeId]
+        })
+      )
+    ).rejects.toMatchObject({
+      code: 'validation',
+      message: expect.stringContaining('OUT-102 -> OUT-101 -> OUT-102')
+    });
+
+    expect(repository.getSnapshot()).toEqual(before);
+  });
+
+  it('accepts an acyclic outcome prerequisite update', async () => {
+    const repository = new LearningDomainRepository(new MockTransport());
+    const outcomeId = 'outcome-foundations-analysis' as LearningOutcomeId;
+    const prerequisiteOutcomeId = 'outcome-foundations-models' as LearningOutcomeId;
+    const before = repository.getSnapshot();
+    const current = before.outcomes.find((outcome) => outcome.id === outcomeId);
+    if (current === undefined) {
+      throw new Error('Expected seeded analysis outcome.');
+    }
+
+    const updated = await firstValueFrom(
+      repository.updateOutcome(outcomeId, {
+        prerequisiteOutcomeIds: [prerequisiteOutcomeId]
+      })
+    );
+
+    expect(updated.prerequisiteOutcomeIds).toEqual([prerequisiteOutcomeId]);
+    expect(updated.version).toBe(current.version + 1);
+  });
 });

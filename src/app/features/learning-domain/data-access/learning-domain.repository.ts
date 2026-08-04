@@ -7,6 +7,8 @@ import {
   type MockHttpMethod,
   type MockScenarioControls
 } from '../../../core/api/mock-transport';
+import { findOutcomePrerequisiteCycle } from '../models/outcome-cycle';
+
 import {
   cloneContentItem,
   cloneCourse,
@@ -733,6 +735,7 @@ export class LearningDomainRepository {
         if (this.outcomeEntities.has(id)) {
           throw this.conflict('outcome', id, 'A learning outcome with this ID already exists.');
         }
+        this.assertOutcomePrerequisiteGraphIsAcyclic(normalized);
         this.outcomeEntities.set(id, normalized);
         const course = this.courseEntities.get(normalized.courseId);
         if (course !== undefined && !course.learningOutcomeIds.includes(id)) {
@@ -792,6 +795,7 @@ export class LearningDomainRepository {
           updatedAt: now(),
           version: current.version + 1
         });
+        this.assertOutcomePrerequisiteGraphIsAcyclic(next);
         this.outcomeEntities.set(id, next);
         if (courseId !== current.courseId) {
           this.moveOutcomeBetweenCourses(id, current.courseId, courseId);
@@ -1428,6 +1432,31 @@ export class LearningDomainRepository {
         throw this.invalidReference('outcome', undefined, 'outcome', prerequisiteOutcomeId, 'The prerequisite belongs to another course.');
       }
     }
+  }
+
+  private assertOutcomePrerequisiteGraphIsAcyclic(candidate: LearningOutcome): void {
+    const prospectiveOutcomes = [...this.outcomeEntities.values()];
+    const candidateIndex = prospectiveOutcomes.findIndex((outcome) => outcome.id === candidate.id);
+    if (candidateIndex === -1) {
+      prospectiveOutcomes.push(candidate);
+    } else {
+      prospectiveOutcomes[candidateIndex] = candidate;
+    }
+
+    const cycle = findOutcomePrerequisiteCycle(prospectiveOutcomes);
+    if (cycle === null) {
+      return;
+    }
+
+    const cyclePath = cycle
+      .map((outcomeId) => prospectiveOutcomes.find((outcome) => outcome.id === outcomeId)?.code ?? outcomeId)
+      .join(' -> ');
+    throw new LearningDomainError(
+      'validation',
+      `Learning outcome prerequisite cycle detected: ${cyclePath}.`,
+      'outcome',
+      candidate.id
+    );
   }
 
   private validateContentOutcomeReferences(

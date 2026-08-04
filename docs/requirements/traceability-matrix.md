@@ -13,8 +13,8 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Program policy, guarded routes/menu, and exact course/cohort dataset verified with all student rows excluded; later program workflows remain. |
 | ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Observer read-only policy, guarded reporting routes/menu, and one authorized cohort row with explicit read-only access verified; later reports remain. |
 | ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Platform-only policy, guarded dashboard/audit menu, and fail-closed zero-row learning dataset verified without arbitrary domain mutation; later administration behavior remains. |
-| OUT-01 | Outcome graph management | P02 | IN_PROGRESS | P02-W01/W02: immutable outcome data workflows plus the guarded lazy list/editor, course/level/status filters, prerequisite selection, and create/update/publish flows verified; cycle rule and graph UI remain P02-W03/W04. |
-| OUT-02 | Cycle and unpublished dependency validation | P02 | IN_PROGRESS | P02-W01/W02: publish states, reference validation, and editor-side same-course, non-self, and published-prerequisite validation verified; cycle validation remains P02-W03. |
+| OUT-01 | Outcome graph management | P02 | IN_PROGRESS | P02-W01-W03: immutable outcome workflows, guarded lazy list/editor, course/level/status filters, prerequisite editing, and cycle-safe create/update/publish writes verified; graph UI remains P02-W04. |
+| OUT-02 | Cycle and unpublished dependency validation | P02 | VERIFIED | P02-W01-W03: repository references plus editor-side same-course/non-self/published-prerequisite checks and deterministic repository-level cycle rejection with an actionable closed path verified. |
 | CONTENT-01 | Content metadata and access conditions | P02 | IN_PROGRESS | P02-W01: immutable content level, duration, format, outcome, lifecycle, and access-condition contracts plus mock CRUD/filter state verified; route/action access enforcement remains P02-W05. |
 | CONTENT-02 | Rule-based learning sequence | P02 | IN_PROGRESS | P02-W01: ordered learning-path entries and explainable reason contracts plus mock CRUD/filter state verified; rule-based ordering and completed/locked exclusion remain P02-W06. |
 | QUESTION-01 | Question types, answers, tags, difficulty, outcome relation | P03 | TODO | - |
@@ -38,7 +38,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | IN_PROGRESS | P02-W01/W02: normalized keyed storage, memoized selectors, stable tracked outcome filtering, and route-level lazy loading verified; graph virtualization remains P02-W04. |
-| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00/P01/P02-W01/W02: 95 passing tests cover platform foundations, authorization/scope, learning-domain repository/store behavior, guarded route loading, editor validation, request failures, unauthorized access, and failed-write preservation; later business rules remain. |
+| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00/P01/P02-W01-W03: 103 passing tests cover platform foundations, authorization/scope, learning-domain repository/store/editor behavior, deterministic cycle detection, cyclic-write atomicity, request failures, unauthorized access, and failed-write preservation; later business rules remain. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | IN_PROGRESS | P01-W03/W04/P01-REV/P02-W02: shell and outcome editor use keyboard-native controls, focus restoration/feedback, ARIA live/alert/busy semantics, retry actions, active-route cues, and non-color request/status text; later feature screens remain. |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | IN_PROGRESS | P01-W03/W04/P01-REV: reference-aligned shell and list/state patterns passed 1440x900 desktop and 390x844 narrow gates with a 64px desktop top bar, deliberate narrow wrapping, and no overflow; feature screens remain later. |
@@ -52,7 +52,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | CMP-06 | See 02-architecture-and-technical.md CMP-06 | P02-P07 | TODO | - |
 | CMP-07 | See 02-architecture-and-technical.md CMP-07 | P02-P07 | TODO | - |
 | CMP-08 | See 02-architecture-and-technical.md CMP-08 | P02-P07 | TODO | - |
-| BR-01 | See 03-business-rules.md BR-01 | P02-P07 | TODO | - |
+| BR-01 | See 03-business-rules.md BR-01 | P02-P07 | VERIFIED | P02-W03: pure deterministic graph validation and repository create/update enforcement reject self, disconnected, and multi-node prerequisite cycles before mutation with a closed path. |
 | BR-02 | See 03-business-rules.md BR-02 | P02-P07 | TODO | - |
 | BR-03 | See 03-business-rules.md BR-03 | P02-P07 | TODO | - |
 | BR-04 | See 03-business-rules.md BR-04 | P02-P07 | TODO | - |
@@ -69,7 +69,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ADV-04 | See 03-business-rules.md ADV-04 | P02/P04/P05/P07 | TODO | - |
 | ADV-05 | See 03-business-rules.md ADV-05 | P02/P04/P05/P07 | TODO | - |
 | ADV-06 | See 03-business-rules.md ADV-06 | P02/P04/P05/P07 | TODO | - |
-| AC-01 | See 04-acceptance-and-delivery.md AC-01 | P02-P08 | TODO | - |
+| AC-01 | See 04-acceptance-and-delivery.md AC-01 | P02-P08 | VERIFIED | P02-W03: prospective outcome writes are cycle-checked before entity/course mutation; cyclic saves/publishes return a validation error with the ordered closed outcome-code path. |
 | AC-02 | See 04-acceptance-and-delivery.md AC-02 | P02-P08 | TODO | - |
 | AC-03 | See 04-acceptance-and-delivery.md AC-03 | P02-P08 | TODO | - |
 | AC-04 | See 04-acceptance-and-delivery.md AC-04 | P02-P08 | TODO | - |
