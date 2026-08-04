@@ -29,7 +29,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ADAPT-02 | Recommendation reason | P07 | TODO | - |
 | ANALYTICS-01 | Heatmap, trend, item metrics, cohort comparison | P07 | TODO | - |
 | ANALYTICS-02 | Minimum cohort privacy rule | P07 | TODO | - |
-| TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | TODO | - |
+| TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | P00-W01: Angular 20.3.27 standalone strict workspace; unit, production-build, and browser smoke gates passed 2026-08-04. |
 | TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | TODO | - |
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | TODO | - |
@@ -38,11 +38,11 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
-| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | TODO | - |
+| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00-W01: Vitest + Angular TestBed baseline passes 1 component smoke test; critical facade/store/business-rule coverage follows feature packets. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | TODO | - |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | TODO | - |
-| TECH-14 | See 02-architecture-and-technical.md TECH-14 | P00-P08 | TODO | - |
+| TECH-14 | See 02-architecture-and-technical.md TECH-14 | P00-P08 | IN_PROGRESS | P00-W01: standalone router foundation verified; route-level lazy feature routes are assigned to P00-W02. |
 | TECH-15 | See 02-architecture-and-technical.md TECH-15 | P00-P08 | TODO | - |
 | CMP-01 | See 02-architecture-and-technical.md CMP-01 | P02-P07 | TODO | - |
 | CMP-02 | See 02-architecture-and-technical.md CMP-02 | P02-P07 | TODO | - |
@@ -82,8 +82,8 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | TODO | - |
 | AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |
 | AC-13 | See 04-acceptance-and-delivery.md AC-13 | P02-P08 | TODO | - |
-| AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | TODO | - |
-| DEL-01 | See 04-acceptance-and-delivery.md DEL-01 | P08 | TODO | - |
+| AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | VERIFIED | P00-W01: production build passed at 220.89 kB initial size; browser smoke had no console or page errors. |
+| DEL-01 | See 04-acceptance-and-delivery.md DEL-01 | P08 | IN_PROGRESS | P00-W01: npm workspace and canonical lockfile prepared in the tracked Git repository; final delivery remains P08. |
 | DEL-02 | See 04-acceptance-and-delivery.md DEL-02 | P08 | TODO | - |
 | DEL-03 | See 04-acceptance-and-delivery.md DEL-03 | P08 | TODO | - |
 | DEL-04 | See 04-acceptance-and-delivery.md DEL-04 | P08 | TODO | - |

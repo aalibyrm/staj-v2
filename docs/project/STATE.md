@@ -1,17 +1,17 @@
 # Project State
 
 - Current phase: `00`
-- Phase status: `READY`
+- Phase status: `IN_PROGRESS`
 - Active work packet: `none`
-- Last verified packet: `none`
+- Last verified packet: `P00-W01`
 - Git remote: `origin -> https://github.com/aalibyrm/staj-v2.git`
 - Git branch: `main`
-- Git sync status: `SYNCED`
-- Last verified commit: `250fb526c51bdaf81b834d4d401c8ca3750200bf`
+- Git sync status: `TRACKING origin/main`
+- Last verified commit: `P00-W01 - see Git HEAD`
 - Requirement blockers: `none recorded`
 - UI reference pack: `INSTALLED - 8 screens + briefs + UI spec`
-- Decision gate: `open - see DECISIONS.md`
-- Next action: run `/adaptive-bootstrap`
+- Decision gate: `CLOSED - ADR-005 through ADR-010 and ADR-016 accepted`
+- Next action: run `/adaptive-next` for `P00-W02`
 
 ## Update rule
 
