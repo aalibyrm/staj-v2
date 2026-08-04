@@ -6,13 +6,13 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 |---|---|---|---|---|
 | SCOPE-01 | Platform purpose and explainable rule-based recommendation | P07 | TODO | - |
 | SCOPE-02 | Cross-cutting data flow, rules, authorization, errors, tests | P00-P08 | TODO | - |
-| SCOPE-03 | Dense related demo data | P00/P08 | TODO | - |
-| ROLE-01 | Student behavior and access | P01/P08 | TODO | - |
-| ROLE-02 | Instructor behavior and access | P01/P08 | TODO | - |
-| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | TODO | - |
-| ROLE-04 | Program Manager behavior and access | P01/P08 | TODO | - |
-| ROLE-05 | Observer behavior and access | P01/P08 | TODO | - |
-| ROLE-06 | Platform Administrator behavior and access | P01/P08 | TODO | - |
+| SCOPE-03 | Dense related demo data | P00/P08 | IN_PROGRESS | P00-W05: deterministic relational seed foundation provides 3 terms, 6 courses, 6 roles, 36 outcomes, 12 cohorts, and 120 students; feature/report records remain later phases. |
+| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Student role definition and 120 pseudonymous linked students seeded; behavior and authorization remain Phase 01. |
+| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Instructor role definition seeded; behavior and authorization remain Phase 01. |
+| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Measurement Specialist role definition seeded; behavior and authorization remain Phase 01. |
+| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Program Manager role definition seeded; behavior and authorization remain Phase 01. |
+| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Observer role definition seeded; behavior and authorization remain Phase 01. |
+| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Platform Administrator role definition seeded; behavior and authorization remain Phase 01. |
 | OUT-01 | Outcome graph management | P02 | TODO | - |
 | OUT-02 | Cycle and unpublished dependency validation | P02 | TODO | - |
 | CONTENT-01 | Content metadata and access conditions | P02 | TODO | - |
@@ -86,7 +86,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | DEL-01 | See 04-acceptance-and-delivery.md DEL-01 | P08 | IN_PROGRESS | P00-W01: npm workspace and canonical lockfile prepared in the tracked Git repository; final delivery remains P08. |
 | DEL-02 | See 04-acceptance-and-delivery.md DEL-02 | P08 | TODO | - |
 | DEL-03 | See 04-acceptance-and-delivery.md DEL-03 | P08 | TODO | - |
-| DEL-04 | See 04-acceptance-and-delivery.md DEL-04 | P08 | TODO | - |
+| DEL-04 | See 04-acceptance-and-delivery.md DEL-04 | P08 | IN_PROGRESS | P00-W05: immutable related seed catalog establishes report-useful cohort/course/outcome density; attempts, mastery, item metrics, and final demo density remain later phases/P08. |
 | DEL-05 | See 04-acceptance-and-delivery.md DEL-05 | P08 | TODO | - |
 | DEL-06 | See 04-acceptance-and-delivery.md DEL-06 | P08 | TODO | - |
 | DEL-07 | See 04-acceptance-and-delivery.md DEL-07 | P08 | TODO | - |
