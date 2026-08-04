@@ -30,7 +30,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ANALYTICS-01 | Heatmap, trend, item metrics, cohort comparison | P07 | TODO | - |
 | ANALYTICS-02 | Minimum cohort privacy rule | P07 | TODO | - |
 | TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | P00-W01/W02: Angular 20.3 standalone strict workspace and standalone route placeholders; 4 tests, production build, and 16-route browser smoke passed 2026-08-04. |
-| TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | TODO | - |
+| TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | IN_PROGRESS | P00-W04: immutable global platform state uses readonly Angular Signals/computed values while typed cross-cutting events use RxJS; feature stores and async workflows remain assigned to later packets. |
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | P00-W03: deterministic cold RxJS mock transport covers latency, service failure, unauthorized, conflict, selective retry, normalized errors, and notification contracts; tests passed 2026-08-04. |
 | TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | TODO | - |
@@ -38,7 +38,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
-| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00-W01-W03: Vitest/TestBed baseline now passes 14 tests including deterministic core transport/error contracts; critical facade/store/validator/business-rule coverage follows feature packets. |
+| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00-W01-W04: 27 tests now cover routing, mock transport/errors, Signals state/events, and storage fallback; critical facade/store/validator/business-rule coverage follows feature packets. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | TODO | - |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | TODO | - |
