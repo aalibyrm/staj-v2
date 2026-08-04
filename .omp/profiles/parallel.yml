@@ -1,0 +1,9 @@
+# Optional speed profile. Higher token use. Requires a Git repository for isolation.
+task:
+  batch: true
+  maxConcurrency: 2
+  isolation:
+    mode: auto
+
+async:
+  enabled: false
