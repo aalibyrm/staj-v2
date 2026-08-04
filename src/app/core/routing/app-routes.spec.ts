@@ -62,7 +62,11 @@ describe('application routes', () => {
       await harness.navigateByUrl(url);
 
       expect(router.url).toBe(url);
-      expect(harness.routeNativeElement?.querySelector('main')).not.toBeNull();
+      expect(
+        harness.routeNativeElement?.querySelector(
+          'section[aria-labelledby="route-placeholder-heading"]'
+        )
+      ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
         expectedHeading
       );

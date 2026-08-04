@@ -7,12 +7,12 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | SCOPE-01 | Platform purpose and explainable rule-based recommendation | P07 | TODO | - |
 | SCOPE-02 | Cross-cutting data flow, rules, authorization, errors, tests | P00-P08 | TODO | - |
 | SCOPE-03 | Dense related demo data | P00/P08 | IN_PROGRESS | P00-W05: deterministic relational seed foundation provides 3 terms, 6 courses, 6 roles, 36 outcomes, 12 cohorts, and 120 students; feature/report records remain later phases. |
-| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P01-W01/W02: Student session, own-data policy, permitted learning/exam routes, and cross-role direct-URL denial verified; shell/data filtering remain later packets. |
-| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P01-W01/W02: Instructor assignment/action policy and guarded teaching/question/grading routes verified; shell/data filtering remain later packets. |
-| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P01-W01/W02: Measurement assessment/analytics policy and guarded question/exam/analysis routes verified; shell/data filtering remain later packets. |
-| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01/W02: Program scope policy and guarded course/outcome/analytics routes verified; shell/data filtering remain later packets. |
-| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01/W02: Observer read-only policy and guarded authorized report/audit routes verified; shell/data filtering remain later packets. |
-| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01/W02: Platform-only administration policy and guarded dashboard/audit access verified without arbitrary domain mutation; shell remains later. |
+| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Student session, own-data/route policy, guarded access, and Dashboard/Courses shell menu verified; data filtering remains P01-W05. |
+| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Instructor assignment/action policy, guarded teaching routes, and seven-item teaching shell menu verified; data filtering remains P01-W05. |
+| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Measurement assessment/analytics policy, guarded routes, and six-item analysis shell menu verified; data filtering remains P01-W05. |
+| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Program scope policy, guarded routes, and five-item program shell menu verified; data filtering remains P01-W05. |
+| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Observer read-only policy, guarded report routes, and three-item reporting shell menu verified; data filtering remains P01-W05. |
+| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Platform-only policy, guarded dashboard/audit routes, and two-item administration shell menu verified without arbitrary domain mutation. |
 | OUT-01 | Outcome graph management | P02 | TODO | - |
 | OUT-02 | Cycle and unpublished dependency validation | P02 | TODO | - |
 | CONTENT-01 | Content metadata and access conditions | P02 | TODO | - |
@@ -34,14 +34,14 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | Phase 00 exit review: deterministic mock latency, service failure, unauthorized, conflict, and selective retry scenarios remain covered in the 32-test passing suite. |
 | TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | TODO | - |
-| TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01/W02: route, action, and data-scope decisions are separate deny-by-default policies; canMatch now enforces direct URLs before lazy loading. Row filtering remains P01-W05. |
+| TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01-W03: separate deny-by-default policies feed canMatch guards and capability-derived menus; menus complement rather than replace route enforcement. Row filtering remains P01-W05. |
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
 | TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | Phase 00 exit review: 32 tests cover routing, mock transport/errors, Signals state/events, storage fallback, and relational seed invariants; feature business-rule coverage follows later packets. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
-| TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | TODO | - |
-| TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | TODO | - |
+| TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | IN_PROGRESS | P01-W03: labeled navigation/account controls, aria-current, textual connectivity, visible focus, drawer focus entry, Escape close, and trigger restoration passed component/live checks; feature screens remain later phases. |
+| TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | IN_PROGRESS | P01-W03: 1440x900 desktop sidebar/topbar and 390x844 drawer shell passed without overflow; feature screen responsive layouts remain later packets. |
 | TECH-14 | See 02-architecture-and-technical.md TECH-14 | P00-P08 | VERIFIED | P01-W02: all 16 product routes use canMatch before lazy components; denied loader non-invocation, public unauthorized routing, return URLs, and separate lazy chunks passed 55 tests/build. |
 | TECH-15 | See 02-architecture-and-technical.md TECH-15 | P00-P08 | TODO | - |
 | CMP-01 | See 02-architecture-and-technical.md CMP-01 | P02-P07 | TODO | - |
@@ -77,9 +77,9 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-06 | See 04-acceptance-and-delivery.md AC-06 | P02-P08 | TODO | - |
 | AC-07 | See 04-acceptance-and-delivery.md AC-07 | P02-P08 | TODO | - |
 | AC-08 | See 04-acceptance-and-delivery.md AC-08 | P02-P08 | TODO | - |
-| AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | IN_PROGRESS | P01-W01/W02: student, instructor, and program role/scope decisions plus direct-route enforcement verified; filtered datasets remain P01-W05. |
+| AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | IN_PROGRESS | P01-W01-W03: six-role decisions, direct-route enforcement, exact role-aware menus, and account switching to a permitted dashboard verified; filtered datasets remain P01-W05. |
 | AC-10 | See 04-acceptance-and-delivery.md AC-10 | P02-P08 | TODO | - |
-| AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | IN_PROGRESS | P01-W02: public accessible unauthorized state, safe internal return URL, and live denial behavior verified; loading/slow/empty/error/retry patterns remain P01-W04. |
+| AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | IN_PROGRESS | P01-W02/W03: safe public unauthorized behavior now renders inside the responsive desktop/narrow shell; loading/slow/empty/error/retry patterns remain P01-W04. |
 | AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |
 | AC-13 | See 04-acceptance-and-delivery.md AC-13 | P02-P08 | TODO | - |
 | AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | VERIFIED | Phase 00 exit review: production build passed at 227.95 kB initial size; live startup redirected correctly with no console/page errors. |

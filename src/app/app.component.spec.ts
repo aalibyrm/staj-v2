@@ -1,10 +1,11 @@
 import { provideRouter } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
+import { describe, expect, it } from 'vitest';
 
 import { AppComponent } from './app.component';
 
 describe('AppComponent', () => {
-  it('renders the bootstrap heading and status', async () => {
+  it('composes exactly one application shell and router outlet without bootstrap status', async () => {
     await TestBed.configureTestingModule({
       imports: [AppComponent],
       providers: [provideRouter([])]
@@ -14,10 +15,11 @@ describe('AppComponent', () => {
     fixture.detectChanges();
 
     const element: HTMLElement = fixture.nativeElement;
-    expect(element.querySelector('h1')?.textContent?.trim()).toBe('Client workspace ready');
-    expect(element.querySelector('[role="status"]')?.textContent?.trim()).toBe(
-      'Loading application routes.'
-    );
-    expect(element.querySelector('router-outlet')).not.toBeNull();
+    expect(element.querySelectorAll('app-shell')).toHaveLength(1);
+    expect(element.querySelectorAll('router-outlet')).toHaveLength(1);
+    expect(element.querySelectorAll('main')).toHaveLength(1);
+    expect(element.querySelector('.bootstrap-status')).toBeNull();
+    expect(element.textContent).not.toContain('Client workspace ready');
+    expect(element.textContent).not.toContain('Loading application routes.');
   });
 });

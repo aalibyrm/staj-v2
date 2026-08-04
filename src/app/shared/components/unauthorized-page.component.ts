@@ -34,14 +34,14 @@ const safeInternalReturnUrl = (value: string | null): string | null => {
   imports: [RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main aria-labelledby="access-denied-heading">
+    <section class="unauthorized-page" aria-labelledby="access-denied-heading">
       <h1 id="access-denied-heading">Access denied</h1>
       <p role="alert">You do not have permission to access this page.</p>
       @if (requestedPath() !== null) {
         <p>Requested internal path: <code>{{ requestedPath() }}</code></p>
       }
       <a routerLink="/learning/dashboard">Return to dashboard</a>
-    </main>
+    </section>
   `,
   styles: [
     `
@@ -50,7 +50,7 @@ const safeInternalReturnUrl = (value: string | null): string | null => {
         min-height: 100%;
       }
 
-      main {
+      .unauthorized-page {
         display: grid;
         min-height: 100%;
         align-content: center;
