@@ -13,10 +13,10 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Program policy, guarded routes/menu, and exact course/cohort dataset verified with all student rows excluded; later program workflows remain. |
 | ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Observer read-only policy, guarded reporting routes/menu, and one authorized cohort row with explicit read-only access verified; later reports remain. |
 | ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Platform-only policy, guarded dashboard/audit menu, and fail-closed zero-row learning dataset verified without arbitrary domain mutation; later administration behavior remains. |
-| OUT-01 | Outcome graph management | P02 | TODO | - |
-| OUT-02 | Cycle and unpublished dependency validation | P02 | TODO | - |
-| CONTENT-01 | Content metadata and access conditions | P02 | TODO | - |
-| CONTENT-02 | Rule-based learning sequence | P02 | TODO | - |
+| OUT-01 | Outcome graph management | P02 | IN_PROGRESS | P02-W01: immutable course/outcome models, prerequisite references, mock CRUD/list repository, normalized Signals store, and facade workflows verified; editor, cycle rule, and graph UI remain. |
+| OUT-02 | Cycle and unpublished dependency validation | P02 | IN_PROGRESS | P02-W01: outcome publish states and explicit prerequisite/reference validation are represented; unpublished dependency and cycle validation remain P02-W02/W03. |
+| CONTENT-01 | Content metadata and access conditions | P02 | IN_PROGRESS | P02-W01: immutable content level, duration, format, outcome, lifecycle, and access-condition contracts plus mock CRUD/filter state verified; route/action access enforcement remains P02-W05. |
+| CONTENT-02 | Rule-based learning sequence | P02 | IN_PROGRESS | P02-W01: ordered learning-path entries and explainable reason contracts plus mock CRUD/filter state verified; rule-based ordering and completed/locked exclusion remain P02-W06. |
 | QUESTION-01 | Question types, answers, tags, difficulty, outcome relation | P03 | TODO | - |
 | QUESTION-02 | Published question versioning | P03 | TODO | - |
 | BLUEPRINT-01 | Blueprint distributions and constraints | P04 | TODO | - |
@@ -30,15 +30,15 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ANALYTICS-01 | Heatmap, trend, item metrics, cohort comparison | P07 | TODO | - |
 | ANALYTICS-02 | Minimum cohort privacy rule | P07 | TODO | - |
 | TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | Phase 00 exit review: Angular 20.3 standalone strict workspace, 32 tests, production build, architecture tree, and live startup smoke passed 2026-08-04. |
-| TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | IN_PROGRESS | P00-W04: immutable global platform state uses readonly Angular Signals/computed values while typed cross-cutting events use RxJS; feature stores and async workflows remain assigned to later packets. |
+| TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | IN_PROGRESS | P00-W04/P02-W01: immutable global state and normalized learning-domain feature state use readonly Signals/computed selectors; typed async CRUD/list workflows use RxJS and stale responses cannot replace newer loads. Other feature stores remain. |
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | Phase 00 exit review: deterministic mock latency, service failure, unauthorized, conflict, and selective retry scenarios remain covered in the 32-test passing suite. |
 | TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | IN_PROGRESS | P01-W04/P01-REV: reusable search, repeated multi-filter, sort, page, reset, malformed-input normalization, and history restoration round-trip through URL state; server-backed pagination/list simulation remains feature work. |
 | TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01-W05/P01-REV: deny-by-default route/action/data policies feed root and child canMatch guards, capability menus, and immutable pre-render row filtering; malformed runtime data targets deny without throwing. Real feature action enforcement remains later. |
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
-| TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
-| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | Phase 00 exit review: 32 tests cover routing, mock transport/errors, Signals state/events, storage fallback, and relational seed invariants; feature business-rule coverage follows later packets. |
+| TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | IN_PROGRESS | P02-W01: learning-domain entities use normalized keyed storage, stable filters/sorts, and memoized computed selectors; route-level lazy loading and graph/list virtualization remain later packets. |
+| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00/P01/P02-W01: 85 passing tests now cover platform foundations, authorization/scope, immutable learning-domain repository CRUD/reference errors, normalized upsert/delete, selectors, and request failure transitions; later business rules remain. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | IN_PROGRESS | P01-W03/W04/P01-REV: shell and uniquely labeled request/list/top-bar controls cover keyboard-native operation, drawer focus restoration, ARIA live/alert/busy semantics, retry actions, active-route cues, honest unavailable states, and non-color status text; feature screens remain later. |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | IN_PROGRESS | P01-W03/W04/P01-REV: reference-aligned shell and list/state patterns passed 1440x900 desktop and 390x844 narrow gates with a 64px desktop top bar, deliberate narrow wrapping, and no overflow; feature screens remain later. |
