@@ -24,6 +24,7 @@ task:
   maxRecursionDepth: 1
   enableEffort: false
   maxEffort: max
+  showResolvedModelBadge: true
   agentModelOverrides:
     adaptive-builder: "@luna_worker"
     adaptive-auditor: "@luna_worker"
