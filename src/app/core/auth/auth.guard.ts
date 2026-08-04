@@ -4,8 +4,10 @@ import { Router, type CanMatchFn, type Route, type UrlSegment } from '@angular/r
 import {
   ROUTE_CAPABILITIES,
   decideRouteAccess,
+  routeCapabilitiesForPath,
   type RouteCapability
 } from './authorization';
+
 import { SessionStore } from './session.store';
 
 export const ROUTE_CAPABILITIES_DATA_KEY = 'routeCapabilities' as const;
@@ -58,6 +60,22 @@ export const authGuard: CanMatchFn = (route: Route, segments: UrlSegment[]) => {
 
   if (!isRouteCapabilitiesData(capabilities)) {
     return unauthorizedUrlTree(router, segments);
+  }
+
+  const session = inject(SessionStore).session();
+  if (capabilities.some((capability) => decideRouteAccess(session, capability).allowed)) {
+    return true;
+  }
+
+  return unauthorizedUrlTree(router, segments);
+};
+
+export const adaptiveLearningRootGuard: CanMatchFn = (_route, segments) => {
+  const capabilities = routeCapabilitiesForPath(segments.map((segment) => segment.path));
+  const router = inject(Router);
+
+  if (capabilities === undefined) {
+    return false;
   }
 
   const session = inject(SessionStore).session();

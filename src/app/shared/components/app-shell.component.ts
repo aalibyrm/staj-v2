@@ -223,6 +223,56 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
               <span class="status-mark" aria-hidden="true"></span>
               <span>{{ systemStatusLabel() }}</span>
             </div>
+            <div class="term-picker">
+              <label for="term-selector" class="visually-hidden">Term</label>
+              <select
+                id="term-selector"
+                disabled
+                aria-disabled="true"
+                aria-label="Term selector unavailable"
+                aria-describedby="term-selector-unavailable"
+              >
+                <option>Term selection unavailable</option>
+              </select>
+              <span id="term-selector-unavailable" class="top-bar-control-description">
+                Term selection is unavailable in Phase 01.
+              </span>
+            </div>
+            <div class="global-search">
+              <label for="global-search-input" class="visually-hidden">Global search</label>
+              <span class="top-bar-control global-search-field">
+                <span class="top-bar-control-icon" data-icon="search" aria-hidden="true"></span>
+                <input
+                  id="global-search-input"
+                  type="search"
+                  disabled
+                  aria-disabled="true"
+                  aria-label="Global search unavailable"
+                  aria-describedby="global-search-unavailable"
+                  placeholder="Search unavailable"
+                  title="Global search is unavailable in Phase 01."
+                />
+              </span>
+              <span id="global-search-unavailable" class="top-bar-control-description">
+                Global search is unavailable in Phase 01.
+              </span>
+            </div>
+            <button
+              class="top-bar-control notification-control"
+              data-top-bar-control="notifications"
+              type="button"
+              disabled
+              aria-disabled="true"
+              aria-label="Notifications unavailable"
+              aria-describedby="notifications-unavailable"
+              title="Notifications are unavailable in Phase 01."
+            >
+              <span class="top-bar-control-icon" data-icon="notifications" aria-hidden="true"></span>
+              <span class="top-bar-control-label">Notifications</span>
+            </button>
+            <span id="notifications-unavailable" class="top-bar-control-description">
+              Notifications are unavailable in Phase 01.
+            </span>
             <div class="account-picker">
               <label for="demo-account">Demo account</label>
               <select
@@ -419,7 +469,10 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
         letter-spacing: 0.04em;
         text-transform: uppercase;
       }
-      .account-picker label {
+      .account-picker label,
+      .top-bar-control-label,
+      .top-bar-control-description,
+      .visually-hidden {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -430,6 +483,7 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
         white-space: nowrap;
         border: 0;
       }
+
 
       .system-status {
         display: flex;
@@ -517,23 +571,110 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
         align-items: center;
         justify-content: flex-end;
         min-width: 0;
-        flex: 1;
-        gap: 18px;
+        flex: 1 1 auto;
+        flex-wrap: nowrap;
+        gap: 10px;
       }
 
       .compact-status {
+        display: none;
         min-height: 36px;
         padding: 0 8px;
         border: 0;
         background: transparent;
       }
 
+      .term-picker {
+        display: block;
+        min-width: 140px;
+        flex: 0 1 170px;
+      }
+
+      .global-search {
+        display: flex;
+        min-width: 150px;
+        flex: 0 1 220px;
+      }
+
+      .global-search-field {
+        width: 100%;
+      }
+
+      .global-search input {
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--ui-text-muted);
+        font-size: 12px;
+      }
+
+      .global-search input::placeholder {
+        color: var(--ui-text-muted);
+        opacity: 1;
+      }
+
+      .top-bar-control {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 38px;
+        gap: 7px;
+        padding: 7px 10px;
+        border: 1px solid var(--ui-border);
+        border-radius: var(--ui-radius-sm);
+        background: var(--ui-surface-subtle);
+        color: var(--ui-text-muted);
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .notification-control {
+        width: 38px;
+        flex: 0 0 38px;
+        padding: 7px;
+      }
+
+      .top-bar-control:disabled,
+      .term-picker select:disabled,
+      .global-search-field {
+        cursor: not-allowed;
+        opacity: 0.72;
+      }
+
+      .top-bar-control-icon {
+        display: inline-grid;
+        width: 18px;
+        height: 18px;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-size: 10px;
+        line-height: 1;
+      }
+
+      .top-bar-control-icon[data-icon='search']::before {
+        content: '⌕';
+      }
+
+      .top-bar-control-icon[data-icon='notifications']::before {
+        content: '!';
+      }
+
+
       .account-picker {
         display: grid;
-        min-width: min(310px, 32vw);
+        min-width: 190px;
+        flex: 0 1 240px;
         gap: 2px;
       }
 
+
+      .term-picker select,
       .account-picker select {
         width: 100%;
         min-height: 38px;
@@ -549,6 +690,7 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
         display: flex;
         align-items: center;
         min-width: 0;
+        flex: 0 1 180px;
         gap: 9px;
       }
 
@@ -613,16 +755,23 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
         }
 
         .top-bar-actions {
-          gap: 10px;
+          gap: 6px;
         }
 
-        .compact-status {
-          display: none;
-        }
-
+        .term-picker,
+        .global-search,
         .account-picker {
-          min-width: min(270px, 35vw);
+          min-width: 110px;
         }
+
+        .global-search {
+          min-width: 120px;
+        }
+
+        .active-account {
+          flex-basis: 110px;
+        }
+
       }
 
       @media (max-width: 860px) {
@@ -657,7 +806,12 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
 
         .top-bar {
           min-height: 60px;
+          flex-wrap: wrap;
           padding: 10px 16px;
+        }
+
+        .route-heading {
+          flex: 1 1 auto;
         }
 
         .menu-trigger {
@@ -694,15 +848,25 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
           font-size: 10px;
         }
 
+        .compact-status {
+          display: flex;
+        }
+
         .top-bar-actions {
+          flex: 1 1 100%;
+          flex-wrap: wrap;
+          justify-content: flex-start;
           gap: 8px;
         }
 
+        .term-picker,
+        .global-search,
         .account-picker {
           min-width: 0;
-          flex: 1;
+          flex: 1 1 145px;
         }
 
+        .term-picker select,
         .account-picker select {
           min-height: 40px;
           padding-inline: 8px 26px;
@@ -736,9 +900,6 @@ const routeTitle = (snapshot: ActivatedRouteSnapshot): string => {
           max-width: 38vw;
         }
 
-        .account-picker label {
-          display: none;
-        }
       }
     `
   ]

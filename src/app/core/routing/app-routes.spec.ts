@@ -1,10 +1,23 @@
+import { Component } from '@angular/core';
 import { provideRouter, Router } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { TestBed } from '@angular/core/testing';
 
 import { routes } from '../../app.routes';
-import { DEMO_ACCOUNTS, ROLE_CODES, type RoleCode } from '../auth/authorization';
+import {
+  authGuard,
+  adaptiveLearningRootGuard,
+  ROUTE_CAPABILITIES_DATA_KEY
+} from '../auth/auth.guard';
+import { DEMO_ACCOUNTS, ROLE_CODES, ROUTE_CAPABILITIES, type RoleCode } from '../auth/authorization';
 import { SessionStore } from '../auth/session.store';
+import { UnauthorizedPageComponent } from '../../shared/components/unauthorized-page.component';
+
+@Component({
+  standalone: true,
+  template: '<h1>Boundary feature page</h1>'
+})
+class BoundaryFeaturePageComponent {}
 
 const accountIdFor = (role: RoleCode): string => {
   const account = DEMO_ACCOUNTS.find((candidate) => candidate.roleCode === role);
@@ -50,6 +63,70 @@ describe('application routes', () => {
     expect(typeof featureBoundary?.loadChildren).toBe('function');
     expect(featureBoundary?.children).toBeUndefined();
     expect(featureBoundary?.component).toBeUndefined();
+    expect(featureBoundary?.canMatch).toContain(adaptiveLearningRootGuard);
+
+    const unauthorizedRoute = routes.find((route) => route.path === 'unauthorized');
+    expect(unauthorizedRoute?.component).toBe(UnauthorizedPageComponent);
+    expect(unauthorizedRoute?.loadComponent).toBeUndefined();
+    expect(routes.some((route) => route.path === '**')).toBe(true);
+  });
+
+  it('denies direct product URLs before invoking the root feature loader', async () => {
+    TestBed.resetTestingModule();
+    const childLoader = vi.fn(() => Promise.resolve(BoundaryFeaturePageComponent));
+    const featureLoader = vi.fn(() =>
+      Promise.resolve([
+        {
+          path: 'grading',
+          pathMatch: 'full' as const,
+          canMatch: [authGuard],
+          data: {
+            [ROUTE_CAPABILITIES_DATA_KEY]: [ROUTE_CAPABILITIES.instructorTeaching]
+          },
+          loadComponent: childLoader
+        }
+      ])
+    );
+
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([
+          {
+            path: 'unauthorized',
+            pathMatch: 'full',
+            component: UnauthorizedPageComponent
+          },
+          {
+            path: '',
+            canMatch: [adaptiveLearningRootGuard],
+            loadChildren: featureLoader
+          },
+          {
+            path: '**',
+            redirectTo: 'learning/dashboard'
+          }
+        ])
+      ]
+    });
+
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const sessionStore = TestBed.inject(SessionStore);
+
+    await harness.navigateByUrl('/grading/attempt-12');
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Fgrading%2Fattempt-12');
+    expect(featureLoader).not.toHaveBeenCalled();
+
+    sessionStore.signIn(accountIdFor('STUDENT'));
+    await harness.navigateByUrl('/grading');
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Fgrading');
+    expect(featureLoader).not.toHaveBeenCalled();
+
+    sessionStore.signIn(accountIdFor('INSTRUCTOR'));
+    await harness.navigateByUrl('/grading');
+    expect(router.url).toBe('/grading');
+    expect(featureLoader).toHaveBeenCalledTimes(1);
+    expect(childLoader).toHaveBeenCalledTimes(1);
   });
 
   it('resolves every concrete route for its permitted demo role', async () => {

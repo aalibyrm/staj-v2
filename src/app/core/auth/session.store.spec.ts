@@ -346,6 +346,31 @@ describe('data-scope authorization', () => {
     ).toEqual({ allowed: false, reason: 'scope-denied' });
   });
 
+  it('denies malformed runtime targets without throwing', () => {
+    const session = sessionFor(accountWithRole('STUDENT'));
+    const malformedTargets: readonly unknown[] = [
+      null,
+      undefined,
+      'student',
+      42,
+      [],
+      {},
+      { kind: 'unknown', id: 'STUDENT-ANY' },
+      { kind: 'student' },
+      { kind: 'student', id: null },
+      { kind: 'student', id: 42 },
+      { kind: 'student', id: '' },
+      { kind: 'student', id: '   ' }
+    ];
+
+    for (const target of malformedTargets) {
+      const result = decideDataScopeAccess(session, target as never);
+      expect(result).toEqual({ allowed: false, reason: 'scope-denied' });
+      expect(Object.isFrozen(result)).toBe(true);
+    }
+  });
+
+
   it('keeps decisions frozen and independent across calls', () => {
     const studentSession = sessionFor(accountWithRole('STUDENT'));
     const target = { kind: 'student' as const, id: 'STUDENT-NOT-ASSIGNED' };

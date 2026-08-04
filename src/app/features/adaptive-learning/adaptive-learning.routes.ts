@@ -105,16 +105,4 @@ export const adaptiveLearningRoutes: Routes = [
     ROUTE_CAPABILITIES.observerReports,
     ROUTE_CAPABILITIES.platformAdministration
   ]),
-  {
-    path: 'unauthorized',
-    pathMatch: 'full',
-    loadComponent: () =>
-      import('../../shared/components/unauthorized-page.component').then(
-        ({ UnauthorizedPageComponent }) => UnauthorizedPageComponent
-      )
-  },
-  {
-    path: '**',
-    redirectTo: '/learning/dashboard'
-  }
 ];

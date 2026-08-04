@@ -138,6 +138,148 @@ export const ROUTE_CAPABILITIES = deepFreeze({
     allowedRoles: ROUTE_ROLE_POLICY['platform-administration']
   }
 } as const satisfies Readonly<Record<string, RouteCapability>>);
+type RouteCapabilityPath = Readonly<{
+  pattern: readonly string[];
+  capabilities: readonly RouteCapability[];
+}>;
+
+const ROUTE_CAPABILITY_PATHS: readonly RouteCapabilityPath[] = deepFreeze([
+  {
+    pattern: ['learning', 'dashboard'],
+    capabilities: [
+      ROUTE_CAPABILITIES.studentLearning,
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace,
+      ROUTE_CAPABILITIES.programWorkspace,
+      ROUTE_CAPABILITIES.observerReports,
+      ROUTE_CAPABILITIES.platformAdministration
+    ]
+  },
+  {
+    pattern: ['courses'],
+    capabilities: [
+      ROUTE_CAPABILITIES.studentLearning,
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.programWorkspace
+    ]
+  },
+  {
+    pattern: ['courses', ':id', 'path'],
+    capabilities: [ROUTE_CAPABILITIES.studentLearning, ROUTE_CAPABILITIES.instructorTeaching]
+  },
+  {
+    pattern: ['outcomes'],
+    capabilities: [ROUTE_CAPABILITIES.programWorkspace]
+  },
+  {
+    pattern: ['outcomes', 'map'],
+    capabilities: [ROUTE_CAPABILITIES.programWorkspace]
+  },
+  {
+    pattern: ['question-bank'],
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]
+  },
+  {
+    pattern: ['questions', ':id'],
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]
+  },
+  {
+    pattern: ['exam-builder'],
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]
+  },
+  {
+    pattern: ['exams'],
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]
+  },
+  {
+    pattern: ['exam-session', ':token'],
+    capabilities: [ROUTE_CAPABILITIES.studentLearning]
+  },
+  {
+    pattern: ['grading'],
+    capabilities: [ROUTE_CAPABILITIES.instructorTeaching]
+  },
+  {
+    pattern: ['grading', ':attemptId'],
+    capabilities: [ROUTE_CAPABILITIES.instructorTeaching]
+  },
+  {
+    pattern: ['student', ':id', 'analytics'],
+    capabilities: [
+      ROUTE_CAPABILITIES.studentLearning,
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.programWorkspace
+    ]
+  },
+  {
+    pattern: ['cohort-analytics'],
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace,
+      ROUTE_CAPABILITIES.programWorkspace,
+      ROUTE_CAPABILITIES.observerReports
+    ]
+  },
+  {
+    pattern: ['item-analysis'],
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]
+  },
+  {
+    pattern: ['audit-log'],
+    capabilities: [
+      ROUTE_CAPABILITIES.measurementWorkspace,
+      ROUTE_CAPABILITIES.programWorkspace,
+      ROUTE_CAPABILITIES.observerReports,
+      ROUTE_CAPABILITIES.platformAdministration
+    ]
+  }
+] as const);
+
+const routeCapabilityPathMatches = (
+  pattern: readonly string[],
+  path: readonly string[]
+): boolean => {
+  if (pattern.length !== path.length) {
+    return false;
+  }
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const expectedSegment = pattern[index];
+    if (expectedSegment !== undefined && !expectedSegment.startsWith(':') && expectedSegment !== path[index]) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+export function routeCapabilitiesForPath(
+  path: readonly string[]
+): readonly RouteCapability[] | undefined {
+  for (const route of ROUTE_CAPABILITY_PATHS) {
+    if (routeCapabilityPathMatches(route.pattern, path)) {
+      return route.capabilities;
+    }
+  }
+
+  return undefined;
+}
+
 
 export const ACTION_ROLE_POLICY: Readonly<Record<ActionPermissionCode, readonly RoleCode[]>> = deepFreeze({
   'view-own-learning': ['STUDENT'],
@@ -317,24 +459,47 @@ export function decideDataScopeAccess(
   session: AuthSession | null | undefined,
   target: DataTarget
 ): AuthorizationDecision {
+  let kind: unknown;
+  let id: unknown;
+  try {
+    if (
+      target === null ||
+      typeof target !== 'object' ||
+      Array.isArray(target)
+    ) {
+      return decision(false, 'scope-denied');
+    }
+
+    const targetRecord = target as object;
+    kind = 'kind' in targetRecord ? targetRecord.kind : undefined;
+    id = 'id' in targetRecord ? targetRecord.id : undefined;
+  } catch {
+    return decision(false, 'scope-denied');
+  }
+
+  if (
+    typeof kind !== 'string' ||
+    !DATA_SCOPE_KINDS.includes(kind as DataScopeKind) ||
+    typeof id !== 'string' ||
+    id.trim().length === 0
+  ) {
+    return decision(false, 'scope-denied');
+  }
+
   if (!hasAuthenticatedRole(session)) {
     return decision(false, 'unauthenticated');
   }
 
-  const kind = target?.kind as DataScopeKind;
-  const roles = DATA_SCOPE_ROLE_POLICY[kind];
-  if (roles === undefined || !roles.includes(session.account.roleCode)) {
+  const typedKind = kind as DataScopeKind;
+  const roles = DATA_SCOPE_ROLE_POLICY[typedKind];
+  if (!roles.includes(session.account.roleCode)) {
     return decision(false, 'role-denied');
-  }
-
-  if (typeof target.id !== 'string' || target.id.length === 0) {
-    return decision(false, 'scope-denied');
   }
 
   const hasGrant = session.account.scopeGrants.some(
     (grant) =>
-      grant.kind === kind &&
-      (grant.global === true || grant.ids.includes(target.id))
+      grant.kind === typedKind &&
+      (grant.global === true || grant.ids.includes(id))
   );
 
   return hasGrant ? decision(true, 'allowed') : decision(false, 'scope-denied');

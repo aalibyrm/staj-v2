@@ -116,6 +116,30 @@ describe('AppShellComponent', () => {
     expect(statusTexts()).toEqual(['Offline', 'Offline']);
   });
 
+  it('labels unavailable term, search, and notification controls without sample data', async () => {
+    const { fixture } = await createShell();
+    const element: HTMLElement = fixture.nativeElement;
+    const term = element.querySelector<HTMLSelectElement>('#term-selector');
+    const search = element.querySelector<HTMLInputElement>('#global-search-input');
+    const notifications = element.querySelector<HTMLButtonElement>(
+      '[data-top-bar-control="notifications"]'
+    );
+
+    expect(element.querySelector('label[for="term-selector"]')?.textContent).toContain('Term');
+    expect(term?.disabled).toBe(true);
+    expect(term?.getAttribute('aria-label')).toBe('Term selector unavailable');
+    expect(term?.getAttribute('aria-describedby')).toBe('term-selector-unavailable');
+    expect(search?.disabled).toBe(true);
+    expect(search?.getAttribute('aria-label')).toBe('Global search unavailable');
+    expect(search?.getAttribute('aria-describedby')).toBe('global-search-unavailable');
+    expect(search?.getAttribute('placeholder')).toBe('Search unavailable');
+    expect(notifications?.disabled).toBe(true);
+    expect(notifications?.getAttribute('aria-label')).toBe('Notifications unavailable');
+    expect(notifications?.getAttribute('aria-describedby')).toBe('notifications-unavailable');
+    expect(element.textContent).not.toMatch(/Ayşe Aydın|1,248|12,356|%67/u);
+  });
+
+
   it('offers every canonical account and derives the exact role menus after switching', async () => {
     const { fixture, router } = await createShell();
     const element: HTMLElement = fixture.nativeElement;
