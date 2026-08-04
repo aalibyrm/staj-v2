@@ -1,3 +1,5 @@
+import type { RoleCode } from '../../../core/auth/authorization';
+
 declare const termIdBrand: unique symbol;
 declare const courseIdBrand: unique symbol;
 declare const roleIdBrand: unique symbol;
@@ -13,14 +15,6 @@ export type StudentId = string & { readonly [studentIdBrand]: 'StudentId' };
 export type LearningOutcomeId = string & {
   readonly [learningOutcomeIdBrand]: 'LearningOutcomeId';
 };
-
-export type RoleCode =
-  | 'STUDENT'
-  | 'INSTRUCTOR'
-  | 'MEASUREMENT_SPECIALIST'
-  | 'PROGRAM_MANAGER'
-  | 'OBSERVER'
-  | 'PLATFORM_ADMINISTRATOR';
 
 export type TermStatus = 'archived' | 'current' | 'planned';
 export type CourseStatus = 'archived' | 'active' | 'planned';

@@ -7,12 +7,12 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | SCOPE-01 | Platform purpose and explainable rule-based recommendation | P07 | TODO | - |
 | SCOPE-02 | Cross-cutting data flow, rules, authorization, errors, tests | P00-P08 | TODO | - |
 | SCOPE-03 | Dense related demo data | P00/P08 | IN_PROGRESS | P00-W05: deterministic relational seed foundation provides 3 terms, 6 courses, 6 roles, 36 outcomes, 12 cohorts, and 120 students; feature/report records remain later phases. |
-| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Student role definition and 120 pseudonymous linked students seeded; behavior and authorization remain Phase 01. |
-| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Instructor role definition seeded; behavior and authorization remain Phase 01. |
-| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Measurement Specialist role definition seeded; behavior and authorization remain Phase 01. |
-| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Program Manager role definition seeded; behavior and authorization remain Phase 01. |
-| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Observer role definition seeded; behavior and authorization remain Phase 01. |
-| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P00-W05: Platform Administrator role definition seeded; behavior and authorization remain Phase 01. |
+| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P01-W01: Student demo account, session model, own-data scope, and learning route/action policy verified; guards/UI remain later Phase 01 packets. |
+| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P01-W01: Instructor demo account plus assigned student/course/cohort and teaching action policy verified; enforcement/UI remain later packets. |
+| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P01-W01: Measurement Specialist demo account plus assigned assessment/analytics policy verified; enforcement/UI remain later packets. |
+| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01: Program Manager demo account plus assigned program/course/cohort policy verified; enforcement/UI remain later packets. |
+| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01: Observer demo account, authorized cohort scope, and read-only action policy verified; enforcement/UI remain later packets. |
+| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01: Platform Administrator demo account and platform-only administration policy verified without arbitrary domain mutation; enforcement/UI remain later packets. |
 | OUT-01 | Outcome graph management | P02 | TODO | - |
 | OUT-02 | Cycle and unpublished dependency validation | P02 | TODO | - |
 | CONTENT-01 | Content metadata and access conditions | P02 | TODO | - |
@@ -34,7 +34,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | Phase 00 exit review: deterministic mock latency, service failure, unauthorized, conflict, and selective retry scenarios remain covered in the 32-test passing suite. |
 | TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | TODO | - |
-| TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | TODO | - |
+| TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01: route, action, and data-scope decisions are separate pure deny-by-default policies with exact reasons; guards and row filtering remain P01-W02/P01-W05. |
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
@@ -77,7 +77,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-06 | See 04-acceptance-and-delivery.md AC-06 | P02-P08 | TODO | - |
 | AC-07 | See 04-acceptance-and-delivery.md AC-07 | P02-P08 | TODO | - |
 | AC-08 | See 04-acceptance-and-delivery.md AC-08 | P02-P08 | TODO | - |
-| AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | TODO | - |
+| AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | IN_PROGRESS | P01-W01: student own-data, instructor assignment, and program-manager scope decisions are verified; route enforcement and filtered datasets remain P01-W02/P01-W05. |
 | AC-10 | See 04-acceptance-and-delivery.md AC-10 | P02-P08 | TODO | - |
 | AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | TODO | - |
 | AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |

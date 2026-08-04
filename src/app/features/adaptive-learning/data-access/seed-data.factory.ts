@@ -1,10 +1,10 @@
+import type { RoleCode } from '../../../core/auth/authorization';
 import type {
   CohortId,
   CohortStatus,
   CourseId,
   CourseStatus,
   LearningOutcomeId,
-  RoleCode,
   RoleId,
   SeedCohort,
   SeedCourse,
