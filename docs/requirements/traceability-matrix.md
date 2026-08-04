@@ -29,16 +29,16 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ADAPT-02 | Recommendation reason | P07 | TODO | - |
 | ANALYTICS-01 | Heatmap, trend, item metrics, cohort comparison | P07 | TODO | - |
 | ANALYTICS-02 | Minimum cohort privacy rule | P07 | TODO | - |
-| TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | P00-W01/W02: Angular 20.3 standalone strict workspace and standalone route placeholders; 4 tests, production build, and 16-route browser smoke passed 2026-08-04. |
+| TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | Phase 00 exit review: Angular 20.3 standalone strict workspace, 32 tests, production build, architecture tree, and live startup smoke passed 2026-08-04. |
 | TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | IN_PROGRESS | P00-W04: immutable global platform state uses readonly Angular Signals/computed values while typed cross-cutting events use RxJS; feature stores and async workflows remain assigned to later packets. |
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
-| TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | P00-W03: deterministic cold RxJS mock transport covers latency, service failure, unauthorized, conflict, selective retry, normalized errors, and notification contracts; tests passed 2026-08-04. |
+| TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | Phase 00 exit review: deterministic mock latency, service failure, unauthorized, conflict, and selective retry scenarios remain covered in the 32-test passing suite. |
 | TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | TODO | - |
 | TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | TODO | - |
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
-| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00-W01-W04: 27 tests now cover routing, mock transport/errors, Signals state/events, and storage fallback; critical facade/store/validator/business-rule coverage follows feature packets. |
+| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | Phase 00 exit review: 32 tests cover routing, mock transport/errors, Signals state/events, storage fallback, and relational seed invariants; feature business-rule coverage follows later packets. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | TODO | - |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | TODO | - |
@@ -82,7 +82,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | TODO | - |
 | AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |
 | AC-13 | See 04-acceptance-and-delivery.md AC-13 | P02-P08 | TODO | - |
-| AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | VERIFIED | P00-W01: production build passed at 220.89 kB initial size; browser smoke had no console or page errors. |
+| AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | VERIFIED | Phase 00 exit review: production build passed at 227.95 kB initial size; live startup redirected correctly with no console/page errors. |
 | DEL-01 | See 04-acceptance-and-delivery.md DEL-01 | P08 | IN_PROGRESS | P00-W01: npm workspace and canonical lockfile prepared in the tracked Git repository; final delivery remains P08. |
 | DEL-02 | See 04-acceptance-and-delivery.md DEL-02 | P08 | TODO | - |
 | DEL-03 | See 04-acceptance-and-delivery.md DEL-03 | P08 | TODO | - |

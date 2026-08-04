@@ -10,7 +10,7 @@ import { RouterOutlet } from '@angular/router';
   template: `
     <main *ngIf="showBootstrapStatus" class="bootstrap-status" aria-labelledby="bootstrap-title">
       <h1 id="bootstrap-title">Client workspace ready</h1>
-      <p role="status" aria-live="polite">No feature routes are configured yet.</p>
+      <p role="status" aria-live="polite">Loading application routes.</p>
     </main>
     <router-outlet (activate)="onRouteActivated()"></router-outlet>
   `,

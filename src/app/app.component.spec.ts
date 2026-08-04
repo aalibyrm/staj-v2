@@ -16,7 +16,7 @@ describe('AppComponent', () => {
     const element: HTMLElement = fixture.nativeElement;
     expect(element.querySelector('h1')?.textContent?.trim()).toBe('Client workspace ready');
     expect(element.querySelector('[role="status"]')?.textContent?.trim()).toBe(
-      'No feature routes are configured yet.'
+      'Loading application routes.'
     );
     expect(element.querySelector('router-outlet')).not.toBeNull();
   });
