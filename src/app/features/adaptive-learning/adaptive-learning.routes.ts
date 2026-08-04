@@ -7,6 +7,11 @@ import {
 } from '../../core/auth/auth.guard';
 import { ROUTE_CAPABILITIES } from '../../core/auth/authorization';
 
+const loadDataScopeDashboard = () =>
+  import('./components/data-scope-dashboard.component').then(
+    ({ DataScopeDashboardComponent }) => DataScopeDashboardComponent
+  );
+
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
     ({ RoutePlaceholderComponent }) => RoutePlaceholderComponent
@@ -28,14 +33,23 @@ const placeholderRoute = (
 });
 
 export const adaptiveLearningRoutes: Routes = [
-  placeholderRoute('learning/dashboard', 'Learning dashboard', [
-    ROUTE_CAPABILITIES.studentLearning,
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.measurementWorkspace,
-    ROUTE_CAPABILITIES.programWorkspace,
-    ROUTE_CAPABILITIES.observerReports,
-    ROUTE_CAPABILITIES.platformAdministration
-  ]),
+  {
+    path: 'learning/dashboard',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Learning dashboard',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.studentLearning,
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.measurementWorkspace,
+        ROUTE_CAPABILITIES.programWorkspace,
+        ROUTE_CAPABILITIES.observerReports,
+        ROUTE_CAPABILITIES.platformAdministration
+      ]
+    },
+    loadComponent: loadDataScopeDashboard
+  },
   placeholderRoute('courses', 'Courses', [
     ROUTE_CAPABILITIES.studentLearning,
     ROUTE_CAPABILITIES.instructorTeaching,

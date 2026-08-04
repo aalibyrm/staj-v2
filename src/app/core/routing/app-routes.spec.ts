@@ -64,7 +64,7 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(

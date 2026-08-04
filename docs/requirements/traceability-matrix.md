@@ -7,12 +7,12 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | SCOPE-01 | Platform purpose and explainable rule-based recommendation | P07 | TODO | - |
 | SCOPE-02 | Cross-cutting data flow, rules, authorization, errors, tests | P00-P08 | TODO | - |
 | SCOPE-03 | Dense related demo data | P00/P08 | IN_PROGRESS | P00-W05: deterministic relational seed foundation provides 3 terms, 6 courses, 6 roles, 36 outcomes, 12 cohorts, and 120 students; feature/report records remain later phases. |
-| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Student session, own-data/route policy, guarded access, and Dashboard/Courses shell menu verified; data filtering remains P01-W05. |
-| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Instructor assignment/action policy, guarded teaching routes, and seven-item teaching shell menu verified; data filtering remains P01-W05. |
-| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Measurement assessment/analytics policy, guarded routes, and six-item analysis shell menu verified; data filtering remains P01-W05. |
-| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Program scope policy, guarded routes, and five-item program shell menu verified; data filtering remains P01-W05. |
-| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Observer read-only policy, guarded report routes, and three-item reporting shell menu verified; data filtering remains P01-W05. |
-| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W03: Platform-only policy, guarded dashboard/audit routes, and two-item administration shell menu verified without arbitrary domain mutation. |
+| ROLE-01 | Student behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Student session, guarded learning routes/menu, and policy-filtered own course/cohort/student rows verified with unrelated rows absent; later learning behavior remains. |
+| ROLE-02 | Instructor behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Instructor assignment/action policy, guarded teaching routes/menu, and exact assigned course/cohort/three-student dataset verified without unrelated learners; later teaching behavior remains. |
+| ROLE-03 | Measurement Specialist behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Measurement assessment/analytics policy, guarded routes/menu, and canonically granted course row verified; later analysis behavior remains. |
+| ROLE-04 | Program Manager behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Program policy, guarded routes/menu, and exact course/cohort dataset verified with all student rows excluded; later program workflows remain. |
+| ROLE-05 | Observer behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Observer read-only policy, guarded reporting routes/menu, and one authorized cohort row with explicit read-only access verified; later reports remain. |
+| ROLE-06 | Platform Administrator behavior and access | P01/P08 | IN_PROGRESS | P01-W01-W05: Platform-only policy, guarded dashboard/audit menu, and fail-closed zero-row learning dataset verified without arbitrary domain mutation; later administration behavior remains. |
 | OUT-01 | Outcome graph management | P02 | TODO | - |
 | OUT-02 | Cycle and unpublished dependency validation | P02 | TODO | - |
 | CONTENT-01 | Content metadata and access conditions | P02 | TODO | - |
@@ -34,7 +34,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | VERIFIED | Phase 00 exit review: deterministic mock latency, service failure, unauthorized, conflict, and selective retry scenarios remain covered in the 32-test passing suite. |
 | TECH-05 | See 02-architecture-and-technical.md TECH-05 | P00-P08 | IN_PROGRESS | P01-W04: reusable search, repeated multi-filter, sort, and page controls round-trip through URL state; server-backed pagination/list simulation remains feature work. |
-| TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01-W03: separate deny-by-default policies feed canMatch guards and capability-derived menus; menus complement rather than replace route enforcement. Row filtering remains P01-W05. |
+| TECH-06 | See 02-architecture-and-technical.md TECH-06 | P00-P08 | IN_PROGRESS | P01-W01-W05: deny-by-default route/action/data policies feed canMatch guards, capability menus, and pre-render row filtering with exact-grant checks; real feature action enforcement remains later. |
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | TODO | - |
@@ -77,7 +77,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-06 | See 04-acceptance-and-delivery.md AC-06 | P02-P08 | TODO | - |
 | AC-07 | See 04-acceptance-and-delivery.md AC-07 | P02-P08 | TODO | - |
 | AC-08 | See 04-acceptance-and-delivery.md AC-08 | P02-P08 | TODO | - |
-| AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | IN_PROGRESS | P01-W01-W03: six-role decisions, direct-route enforcement, exact role-aware menus, and account switching to a permitted dashboard verified; filtered datasets remain P01-W05. |
+| AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | VERIFIED | P01-W05: live role switching produced exact Student 3, Instructor 5, Program Manager 2, and Observer 1 read-only datasets; denied IDs/text stayed absent and direct routes remained guarded. |
 | AC-10 | See 04-acceptance-and-delivery.md AC-10 | P02-P08 | TODO | - |
 | AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | IN_PROGRESS | P01-W02-W04: reusable loading, empty, slow, error/retry, and unauthorized patterns plus responsive public denial and Courses empty-state demonstration passed tests/UI gates; main feature screens remain later phases. |
 | AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |
