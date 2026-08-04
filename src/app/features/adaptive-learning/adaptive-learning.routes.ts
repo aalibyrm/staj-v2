@@ -11,6 +11,10 @@ const loadDataScopeDashboard = () =>
   import('./components/data-scope-dashboard.component').then(
     ({ DataScopeDashboardComponent }) => DataScopeDashboardComponent
   );
+const loadOutcomeListEditor = () =>
+  import('../learning-domain/components/outcome-list-editor.component').then(
+    ({ OutcomeListEditorComponent }) => OutcomeListEditorComponent
+  );
 
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
@@ -59,7 +63,16 @@ export const adaptiveLearningRoutes: Routes = [
     ROUTE_CAPABILITIES.studentLearning,
     ROUTE_CAPABILITIES.instructorTeaching
   ]),
-  placeholderRoute('outcomes', 'Outcomes', [ROUTE_CAPABILITIES.programWorkspace]),
+  {
+    path: 'outcomes',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Outcomes',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [ROUTE_CAPABILITIES.programWorkspace]
+    },
+    loadComponent: loadOutcomeListEditor
+  },
   placeholderRoute('outcomes/map', 'Outcomes map', [ROUTE_CAPABILITIES.programWorkspace]),
   placeholderRoute('question-bank', 'Question bank', [
     ROUTE_CAPABILITIES.instructorTeaching,
