@@ -1,17 +1,18 @@
+import { NgIf } from '@angular/common';
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet],
+  imports: [NgIf, RouterOutlet],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main class="bootstrap-status" aria-labelledby="bootstrap-title">
+    <main *ngIf="showBootstrapStatus" class="bootstrap-status" aria-labelledby="bootstrap-title">
       <h1 id="bootstrap-title">Client workspace ready</h1>
       <p role="status" aria-live="polite">No feature routes are configured yet.</p>
-      <router-outlet></router-outlet>
     </main>
+    <router-outlet (activate)="onRouteActivated()"></router-outlet>
   `,
   styles: [`
     :host {
@@ -45,4 +46,10 @@ import { RouterOutlet } from '@angular/router';
     }
   `]
 })
-export class AppComponent {}
+export class AppComponent {
+  showBootstrapStatus = true;
+
+  onRouteActivated(): void {
+    this.showBootstrapStatus = false;
+  }
+}

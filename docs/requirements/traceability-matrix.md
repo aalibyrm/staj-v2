@@ -29,7 +29,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ADAPT-02 | Recommendation reason | P07 | TODO | - |
 | ANALYTICS-01 | Heatmap, trend, item metrics, cohort comparison | P07 | TODO | - |
 | ANALYTICS-02 | Minimum cohort privacy rule | P07 | TODO | - |
-| TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | P00-W01: Angular 20.3.27 standalone strict workspace; unit, production-build, and browser smoke gates passed 2026-08-04. |
+| TECH-01 | See 02-architecture-and-technical.md TECH-01 | P00-P08 | VERIFIED | P00-W01/W02: Angular 20.3 standalone strict workspace and standalone route placeholders; 4 tests, production build, and 16-route browser smoke passed 2026-08-04. |
 | TECH-02 | See 02-architecture-and-technical.md TECH-02 | P00-P08 | TODO | - |
 | TECH-03 | See 02-architecture-and-technical.md TECH-03 | P00-P08 | TODO | - |
 | TECH-04 | See 02-architecture-and-technical.md TECH-04 | P00-P08 | TODO | - |
@@ -42,7 +42,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | TODO | - |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | TODO | - |
-| TECH-14 | See 02-architecture-and-technical.md TECH-14 | P00-P08 | IN_PROGRESS | P00-W01: standalone router foundation verified; route-level lazy feature routes are assigned to P00-W02. |
+| TECH-14 | See 02-architecture-and-technical.md TECH-14 | P00-P08 | IN_PROGRESS | P00-W02: adaptive-learning routes and shared placeholder compile as separate lazy chunks; all 16 required URLs and redirects verified. Unauthorized bundle denial remains assigned to Phase 01 auth. |
 | TECH-15 | See 02-architecture-and-technical.md TECH-15 | P00-P08 | TODO | - |
 | CMP-01 | See 02-architecture-and-technical.md CMP-01 | P02-P07 | TODO | - |
 | CMP-02 | See 02-architecture-and-technical.md CMP-02 | P02-P07 | TODO | - |
