@@ -1,34 +1,104 @@
 import type { Route, Routes } from '@angular/router';
 
+import {
+  authGuard,
+  ROUTE_CAPABILITIES_DATA_KEY,
+  type RouteCapabilitiesData
+} from '../../core/auth/auth.guard';
+import { ROUTE_CAPABILITIES } from '../../core/auth/authorization';
+
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
     ({ RoutePlaceholderComponent }) => RoutePlaceholderComponent
   );
 
-const placeholderRoute = (path: string, title: string): Route => ({
+const placeholderRoute = (
+  path: string,
+  title: string,
+  capabilities: RouteCapabilitiesData
+): Route => ({
   path,
   pathMatch: 'full',
-  loadComponent: loadRoutePlaceholder,
-  data: { title }
+  canMatch: [authGuard],
+  data: {
+    title,
+    [ROUTE_CAPABILITIES_DATA_KEY]: capabilities
+  },
+  loadComponent: loadRoutePlaceholder
 });
 
 export const adaptiveLearningRoutes: Routes = [
-  placeholderRoute('learning/dashboard', 'Learning dashboard'),
-  placeholderRoute('courses', 'Courses'),
-  placeholderRoute('courses/:id/path', 'Course path'),
-  placeholderRoute('outcomes', 'Outcomes'),
-  placeholderRoute('outcomes/map', 'Outcomes map'),
-  placeholderRoute('question-bank', 'Question bank'),
-  placeholderRoute('questions/:id', 'Question'),
-  placeholderRoute('exam-builder', 'Exam builder'),
-  placeholderRoute('exams', 'Exams'),
-  placeholderRoute('exam-session/:token', 'Exam session'),
-  placeholderRoute('grading', 'Grading'),
-  placeholderRoute('grading/:attemptId', 'Grading attempt'),
-  placeholderRoute('student/:id/analytics', 'Student analytics'),
-  placeholderRoute('cohort-analytics', 'Cohort analytics'),
-  placeholderRoute('item-analysis', 'Item analysis'),
-  placeholderRoute('audit-log', 'Audit log'),
+  placeholderRoute('learning/dashboard', 'Learning dashboard', [
+    ROUTE_CAPABILITIES.studentLearning,
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace,
+    ROUTE_CAPABILITIES.programWorkspace,
+    ROUTE_CAPABILITIES.observerReports,
+    ROUTE_CAPABILITIES.platformAdministration
+  ]),
+  placeholderRoute('courses', 'Courses', [
+    ROUTE_CAPABILITIES.studentLearning,
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.programWorkspace
+  ]),
+  placeholderRoute('courses/:id/path', 'Course path', [
+    ROUTE_CAPABILITIES.studentLearning,
+    ROUTE_CAPABILITIES.instructorTeaching
+  ]),
+  placeholderRoute('outcomes', 'Outcomes', [ROUTE_CAPABILITIES.programWorkspace]),
+  placeholderRoute('outcomes/map', 'Outcomes map', [ROUTE_CAPABILITIES.programWorkspace]),
+  placeholderRoute('question-bank', 'Question bank', [
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace
+  ]),
+  placeholderRoute('questions/:id', 'Question', [
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace
+  ]),
+  placeholderRoute('exam-builder', 'Exam builder', [
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace
+  ]),
+  placeholderRoute('exams', 'Exams', [
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace
+  ]),
+  placeholderRoute('exam-session/:token', 'Exam session', [
+    ROUTE_CAPABILITIES.studentLearning
+  ]),
+  placeholderRoute('grading', 'Grading', [ROUTE_CAPABILITIES.instructorTeaching]),
+  placeholderRoute('grading/:attemptId', 'Grading attempt', [
+    ROUTE_CAPABILITIES.instructorTeaching
+  ]),
+  placeholderRoute('student/:id/analytics', 'Student analytics', [
+    ROUTE_CAPABILITIES.studentLearning,
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.programWorkspace
+  ]),
+  placeholderRoute('cohort-analytics', 'Cohort analytics', [
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace,
+    ROUTE_CAPABILITIES.programWorkspace,
+    ROUTE_CAPABILITIES.observerReports
+  ]),
+  placeholderRoute('item-analysis', 'Item analysis', [
+    ROUTE_CAPABILITIES.instructorTeaching,
+    ROUTE_CAPABILITIES.measurementWorkspace
+  ]),
+  placeholderRoute('audit-log', 'Audit log', [
+    ROUTE_CAPABILITIES.measurementWorkspace,
+    ROUTE_CAPABILITIES.programWorkspace,
+    ROUTE_CAPABILITIES.observerReports,
+    ROUTE_CAPABILITIES.platformAdministration
+  ]),
+  {
+    path: 'unauthorized',
+    pathMatch: 'full',
+    loadComponent: () =>
+      import('../../shared/components/unauthorized-page.component').then(
+        ({ UnauthorizedPageComponent }) => UnauthorizedPageComponent
+      )
+  },
   {
     path: '**',
     redirectTo: '/learning/dashboard'
