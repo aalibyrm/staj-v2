@@ -6,12 +6,12 @@
 - Last verified packet: `none`
 - Git remote: `origin -> https://github.com/aalibyrm/staj-v2.git`
 - Git branch: `main`
-- Git sync status: `NOT_INITIALIZED`
-- Last verified commit: `none`
+- Git sync status: `SYNCED`
+- Last verified commit: `250fb526c51bdaf81b834d4d401c8ca3750200bf`
 - Requirement blockers: `none recorded`
 - UI reference pack: `INSTALLED - 8 screens + briefs + UI spec`
 - Decision gate: `open - see DECISIONS.md`
-- Next action: run `/adaptive-github-init`, then `/adaptive-bootstrap`
+- Next action: run `/adaptive-bootstrap`
 
 ## Update rule
 
