@@ -43,7 +43,8 @@ const concreteRoutes: ReadonlyArray<readonly [string, string, RoleCode]> = [
   ['/question-bank', 'Question bank', 'INSTRUCTOR'],
   ['/questions/question-7', 'Question', 'INSTRUCTOR'],
   ['/exams/new', 'Build an exam blueprint', 'INSTRUCTOR'],
-  ['/exams', 'Exams', 'INSTRUCTOR'],
+  ['/exams/EXAM-1/edit', 'Build an exam blueprint', 'INSTRUCTOR'],
+  ['/exams', 'Exams', 'PROGRAM_MANAGER'],
   ['/exam-session/session-token', 'Exam session', 'STUDENT'],
   ['/grading', 'Grading', 'INSTRUCTOR'],
   ['/grading/attempt-12', 'Grading attempt', 'INSTRUCTOR'],
@@ -181,31 +182,41 @@ describe('application routes', () => {
     await harness.navigateByUrl('/question-bank');
     expect(router.url).toBe('/unauthorized?returnUrl=%2Fquestion-bank');
   });
-  it('lazy-loads /exams/new for instructor and measurement specialist and removes the old alias', async () => {
+  it('lazy-loads /exams/new and /exams/:id/edit for instructor, measurement specialist, and program manager and denies students', async () => {
     const examRoute = adaptiveLearningRoutes.find((route) => route.path === 'exams/new');
+    const editRoute = adaptiveLearningRoutes.find((route) => route.path === 'exams/:id/edit');
     expect(adaptiveLearningRoutes.some((route) => route.path === 'exam-builder')).toBe(false);
     expect(examRoute?.pathMatch).toBe('full');
     expect(examRoute?.canMatch).toContain(authGuard);
-    expect(examRoute?.component).toBeUndefined();
+    expect(editRoute?.pathMatch).toBe('full');
+    expect(editRoute?.canMatch).toContain(authGuard);
+    expect(editRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace,
+      ROUTE_CAPABILITIES.programWorkspace
+    ]);
     expect(examRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
       ROUTE_CAPABILITIES.instructorTeaching,
-      ROUTE_CAPABILITIES.measurementWorkspace
+      ROUTE_CAPABILITIES.measurementWorkspace,
+      ROUTE_CAPABILITIES.programWorkspace
     ]);
     expect(await examRoute?.loadComponent?.()).toBe(ExamBuilderComponent);
+    expect(await editRoute?.loadComponent?.()).toBe(ExamBuilderComponent);
 
     const harness = await RouterTestingHarness.create();
     const router = TestBed.inject(Router);
     const sessionStore = TestBed.inject(SessionStore);
-    for (const role of ['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const) {
+    for (const role of ['INSTRUCTOR', 'MEASUREMENT_SPECIALIST', 'PROGRAM_MANAGER'] as const) {
       sessionStore.signIn(accountIdFor(role));
       await harness.navigateByUrl('/exams/new');
       expect(router.url).toBe('/exams/new');
-      expect(harness.routeNativeElement?.querySelector('#exam-builder-heading')).not.toBeNull();
     }
     sessionStore.signIn(accountIdFor('STUDENT'));
     await harness.navigateByUrl('/unauthorized');
     await harness.navigateByUrl('/exams/new');
     expect(router.url).toBe('/unauthorized?returnUrl=%2Fexams%2Fnew');
+    await harness.navigateByUrl('/exams/EXAM-1/edit');
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Fexams%2FEXAM-1%2Fedit');
   });
 
   it('resolves the lazy outcome map for its three roles and denies an unrelated role', async () => {

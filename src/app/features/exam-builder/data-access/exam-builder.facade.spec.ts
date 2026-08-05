@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { firstValueFrom, of, Subject, throwError, type Observable } from 'rxjs';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createSeedData } from '../../adaptive-learning/data-access/seed-data.factory';
+import { QuestionBankRepository } from '../../question-bank/data-access/question-bank.facade';
+import { asCourseId, asLearningOutcomeId, asQuestionId, asQuestionVersionId, type Question, type QuestionVersion } from '../../question-bank/models/question.models';
 import {
+  createExamBlueprint,
   validateExamBlueprint,
   type ExamBlueprint,
   type ExamBlueprintCurrentCoverageInput
@@ -25,6 +29,63 @@ const matchingCoverageFor = (target: ExamBlueprint): ExamBlueprintCurrentCoverag
     currentPoints: targetPoints
   }))
 });
+
+const selectionSnapshot = (id = 'Q-1', version = 1, points = 2): QuestionVersion => {
+  const questionId = asQuestionId(id);
+  const outcomeId = asLearningOutcomeId('OUTCOME-MATH101-2025-FALL-01');
+  const courseId = asCourseId('COURSE-MATH101-2025-FALL');
+  return {
+    id: questionId,
+    questionId,
+    version,
+    versionId: asQuestionVersionId(`${id}-v${version}`),
+    status: 'published',
+    courseId,
+    outcomeId,
+    course: { id: courseId, code: 'MATH-101', title: 'Foundations of Data Literacy' },
+    outcome: { id: outcomeId, code: 'OUTCOME-01', title: 'Identify foundational concepts' },
+    title: `Question ${id}`,
+    stem: 'Stem',
+    explanation: '',
+    tags: ['math'],
+    difficulty: 'easy',
+    points,
+    grade: 'foundation',
+    type: 'single-choice',
+    options: [{ id: 'A', label: 'A' }],
+    answer: { kind: 'choice', optionIds: ['A'] },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+    changeNote: 'seed'
+  };
+};
+
+const selectionTarget = (count = 1, points = count * 2): ExamBlueprint => {
+  const target = createExamBlueprint({
+    targetQuestionCount: count,
+    targetPoints: points,
+    outcomeBuckets: [{ key: 'OUTCOME-MATH101-2025-FALL-01', targetQuestionCount: count, targetPoints: points }],
+    difficultyBuckets: [{ key: 'easy', targetQuestionCount: count, targetPoints: points }],
+    questionTypeBuckets: [{ key: 'single-choice', targetQuestionCount: count, targetPoints: points }]
+  });
+  if (target === null) throw new Error('Expected a valid selection target.');
+  return target;
+};
+
+const questionRowFor = (snapshot: QuestionVersion): Question => ({
+  ...snapshot,
+  status: 'published',
+  id: snapshot.questionId
+});
+
+const questionRepositoryStub = (
+  list$: Observable<unknown>,
+  history: readonly QuestionVersion[]
+): QuestionBankRepository => ({
+  listQuestions: vi.fn(() => list$),
+  getQuestionVersionHistory: vi.fn(() => of(history))
+} as unknown as QuestionBankRepository);
 
 describe('ExamBuilderFacade', () => {
   it('derives canonical seed choices, an initial valid target, and truthful missing comparison', () => {
@@ -112,5 +173,79 @@ describe('ExamBuilderFacade', () => {
     expect(facade.normalizedSettings()).toEqual(facade.settings());
     expect(facade.setSettings({ title: ' ', durationMinutes: 0, rules: [] })).toBe(false);
     expect(facade.settings().title).toBe('Untitled exam');
+  });
+  it('automatically selects one retained immutable snapshot without duplicate stable identity', async () => {
+    const snapshot = selectionSnapshot();
+    const row = questionRowFor(snapshot);
+    const repository = questionRepositoryStub(of({ items: [row, row] }), [snapshot]);
+    const facade = new ExamBuilderFacade(null, null, repository);
+    expect(facade.applyBlueprint(selectionTarget())).toBe(true);
+
+    const state = await firstValueFrom(facade.autoSelectQuestions());
+
+    expect(state.status).toBe('success');
+    expect(state.selected).toHaveLength(1);
+    expect(state.selected[0]?.versionId).toBe(snapshot.versionId);
+    expect(facade.selectedPinnedSnapshots()).toHaveLength(1);
+    expect(Object.isFrozen(state)).toBe(true);
+    expect(Object.isFrozen(state.selected)).toBe(true);
+    expect(Object.isFrozen(facade.selectedPinnedSnapshots()[0])).toBe(true);
+  });
+
+  it('returns explicit partial and empty unmet reasons from bounded selection', async () => {
+    const snapshot = selectionSnapshot();
+    const partialRepository = questionRepositoryStub(of({ items: [questionRowFor(snapshot)] }), [snapshot]);
+    const partialFacade = new ExamBuilderFacade(null, null, partialRepository);
+    expect(partialFacade.applyBlueprint(selectionTarget(2, 4))).toBe(true);
+    const partial = await firstValueFrom(partialFacade.autoSelectQuestions());
+    expect(partial.status).toBe('partial');
+    expect(partial.selected).toHaveLength(1);
+    expect(partial.unmetReasons.length).toBeGreaterThan(0);
+    expect(partial.unmetReasons[0]?.message).toContain('missing');
+
+    const emptyRepository = questionRepositoryStub(of({ items: [] }), []);
+    const emptyFacade = new ExamBuilderFacade(null, null, emptyRepository);
+    expect(emptyFacade.applyBlueprint(selectionTarget())).toBe(true);
+    const empty = await firstValueFrom(emptyFacade.autoSelectQuestions());
+    expect(empty.status).toBe('empty');
+    expect(empty.selected).toEqual([]);
+    expect(empty.unmetReasons.length).toBeGreaterThan(0);
+  });
+
+  it('keeps pinned selection unchanged on repository failure and exposes an error state', async () => {
+    const snapshot = selectionSnapshot();
+    const repository = questionRepositoryStub(throwError(() => new Error('question bank unavailable')), [snapshot]);
+    const facade = new ExamBuilderFacade(null, null, repository);
+    facade.setSelectedQuestionVersions([snapshot]);
+    const before = facade.selectedPinnedSnapshots();
+
+    await expect(firstValueFrom(facade.autoSelectQuestions())).rejects.toThrow('question bank unavailable');
+
+    expect(facade.selectedPinnedSnapshots()).toBe(before);
+    expect(facade.autoSelectionState().status).toBe('error');
+  });
+
+  it('ignores stale automatic-selection responses after a newer request', async () => {
+    const first = new Subject<unknown>();
+    const second = new Subject<unknown>();
+    const firstSnapshot = selectionSnapshot('Q-1');
+    const secondSnapshot = selectionSnapshot('Q-2');
+    const repository = {
+      listQuestions: vi.fn()
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(second),
+      getQuestionVersionHistory: vi.fn((id: string) => of([id === 'Q-2' ? secondSnapshot : firstSnapshot]))
+    } as unknown as QuestionBankRepository;
+    const facade = new ExamBuilderFacade(null, null, repository);
+    expect(facade.applyBlueprint(selectionTarget())).toBe(true);
+    facade.autoSelectQuestions().subscribe({ error: () => undefined });
+    const latest = firstValueFrom(facade.autoSelectQuestions());
+    second.next({ items: [questionRowFor(secondSnapshot)] });
+    second.complete();
+    await latest;
+    first.next({ items: [questionRowFor(firstSnapshot)] });
+    first.complete();
+
+    expect(facade.selectedPinnedSnapshots().map((item) => item.questionId)).toEqual([secondSnapshot.questionId]);
   });
 });

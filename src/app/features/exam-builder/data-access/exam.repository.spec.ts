@@ -23,15 +23,15 @@ const sessionFor = (role: 'INSTRUCTOR' | 'MEASUREMENT_SPECIALIST' | 'PROGRAM_MAN
 };
 
 const snapshot = {
-  id: asQuestionId('Q-1'), questionId: asQuestionId('Q-1'), version: 1, versionId: asQuestionVersionId('Q-1-v1'), status: 'published', courseId: asCourseId('COURSE-1'), outcomeId: asLearningOutcomeId('OUT-1'),
-  course: { id: asCourseId('COURSE-1'), code: 'C', title: 'Course' }, outcome: { id: asLearningOutcomeId('OUT-1'), code: 'O', title: 'Outcome' }, title: 'Question', stem: 'Stem', explanation: '', tags: [], difficulty: 'easy', points: 2,
+  id: asQuestionId('Q-1'), questionId: asQuestionId('Q-1'), version: 1, versionId: asQuestionVersionId('Q-1-v1'), status: 'published', courseId: asCourseId('COURSE-MATH101-2025-FALL'), outcomeId: asLearningOutcomeId('OUTCOME-MATH101-2025-FALL-01'),
+  course: { id: asCourseId('COURSE-MATH101-2025-FALL'), code: 'MATH-101', title: 'Foundations of Data Literacy' }, outcome: { id: asLearningOutcomeId('OUTCOME-MATH101-2025-FALL-01'), code: 'OUTCOME-01', title: 'Identify foundational concepts' }, title: 'Question', stem: 'Stem', explanation: '', tags: [], difficulty: 'easy', points: 2,
   grade: 'foundation', type: 'single-choice', options: [{ id: 'A', label: 'A' }], answer: { kind: 'choice', optionIds: ['A'] },
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', publishedAt: '2026-01-01T00:00:00.000Z', changeNote: 'seed'
 } as const;
 
 const input = {
   title: '  Algebra exam ', durationMinutes: 30, rules: [{ key: 'shuffle', value: true }],
-  blueprint: createExamBlueprint({ targetQuestionCount: 1, targetPoints: 2, outcomeBuckets: [{ key: 'OUT-1', targetQuestionCount: 1, targetPoints: 2 }], difficultyBuckets: [{ key: 'easy', targetQuestionCount: 1, targetPoints: 2 }], questionTypeBuckets: [{ key: 'single-choice', targetQuestionCount: 1, targetPoints: 2 }] })!,
+  blueprint: createExamBlueprint({ targetQuestionCount: 1, targetPoints: 2, outcomeBuckets: [{ key: 'OUTCOME-MATH101-2025-FALL-01', targetQuestionCount: 1, targetPoints: 2 }], difficultyBuckets: [{ key: 'easy', targetQuestionCount: 1, targetPoints: 2 }], questionTypeBuckets: [{ key: 'single-choice', targetQuestionCount: 1, targetPoints: 2 }] })!,
   questionVersions: [snapshot]
 };
 

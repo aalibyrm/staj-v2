@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, ElementRef, Injector, ViewChild, afterNextRender, computed, inject, signal } from '@angular/core';
-import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, ViewChild, afterNextRender, computed, inject, signal, type OnInit } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
+import { FormControl, FormGroup, ReactiveFormsModule, Validators, type ValidationErrors, type ValidatorFn } from '@angular/forms';
 
 import { BlueprintConstraintEditorComponent } from './blueprint-constraint-editor.component';
 import { BlueprintConstraintPanelComponent } from './blueprint-constraint-panel.component';
@@ -73,10 +74,18 @@ import type { ExamRuleInput } from '../models/exam.models';
               <input id="exam-duration" type="number" min="1" step="1" formControlName="durationMinutes" />
               <label for="exam-rules">Rules (one ordered value)</label>
               <input id="exam-rules" type="text" formControlName="rules" autocomplete="off" placeholder="shuffleQuestions: true" />
-              <label for="successor-note">Successor change note</label>
-              <textarea id="successor-note" rows="2" formControlName="changeNote" aria-describedby="successor-help"></textarea>
+              <label for="successor-note">Successor change note <span *ngIf="successorReasonRequired()" aria-hidden="true">*</span></label>
+              <textarea
+                id="successor-note"
+                rows="2"
+                formControlName="changeNote"
+                [attr.required]="successorReasonRequired() ? '' : null"
+                [attr.aria-invalid]="successorReasonRequired() && successorReasonInvalid() ? 'true' : null"
+                [attr.aria-describedby]="successorReasonRequired() ? 'successor-help successor-note-error' : 'successor-help'"
+              ></textarea>
               <small id="successor-help">Required only when creating a successor from a published exam.</small>
-              <p id="settings-errors" class="field-error" *ngIf="form.invalid && form.touched">Enter a nonblank title and positive whole-minute duration.</p>
+              <p id="successor-note-error" class="field-error" *ngIf="successorReasonRequired() && successorReasonInvalid()">Enter a nonblank change note before creating the successor.</p>
+              <p id="settings-errors" class="field-error" *ngIf="form.invalid && form.touched">Enter valid settings and any required successor reason.</p>
               <div class="action-row">
                 <button type="submit" [disabled]="form.invalid || isBusy()">{{ facade.currentExam()?.status === 'published' ? 'Create editable successor' : 'Save draft' }}</button>
                 <button #publishTriggerButton type="button" class="secondary-action" [disabled]="!canOpenPublishConfirmation()" (click)="publish()">Publish exam</button>
@@ -111,7 +120,18 @@ import type { ExamRuleInput } from '../models/exam.models';
           <section class="selection-shell" aria-labelledby="selection-heading">
             <div class="card-heading"><span class="eyebrow">Question selection</span><span class="summary-status">{{ facade.selectedPinnedSnapshots().length }} pinned</span></div>
             <h2 id="selection-heading">Pinned published versions</h2>
-            <p *ngIf="facade.selectedPinnedSnapshots().length === 0">No published question versions are selected. Add published snapshots through the facade before publishing.</p>
+            <div class="automatic-selection" aria-labelledby="automatic-selection-heading">
+              <div class="card-heading"><span id="automatic-selection-heading" class="eyebrow">Automatic selection</span><span class="summary-status">{{ automaticSelectionState().status }}</span></div>
+              <p>{{ automaticSelectionState().message || 'Select deterministic published snapshots from the authorized question bank.' }}</p>
+              <div class="action-row">
+                <button type="button" [disabled]="!canAutomaticSelect()" (click)="automaticSelect()">Automatic select</button>
+                <button *ngIf="automaticSelectionState().retryable" type="button" class="secondary-action" [disabled]="isBusy()" (click)="retryAutomaticSelect()">Retry</button>
+              </div>
+              <ul *ngIf="automaticSelectionState().unmetReasons.length > 0" class="reason-list">
+                <li *ngFor="let reason of automaticSelectionState().unmetReasons; trackBy: trackByReason"><strong>{{ reason.dimension }}{{ reason.key ? ' · ' + reason.key : '' }}</strong><span>{{ reason.message }}</span></li>
+              </ul>
+            </div>
+            <p *ngIf="facade.selectedPinnedSnapshots().length === 0">No published question versions are selected. Automatic selection or another facade workflow can pin retained snapshots.</p>
             <ol *ngIf="facade.selectedPinnedSnapshots().length > 0" class="snapshot-list">
               <li *ngFor="let snapshot of facade.selectedPinnedSnapshots(); trackBy: trackByVersion"><span>{{ snapshot.questionId }}</span><small>{{ snapshot.versionId }} · {{ snapshot.points }} points</small></li>
             </ol>
@@ -192,40 +212,89 @@ import type { ExamRuleInput } from '../models/exam.models';
     @media (max-width:680px) { .exam-builder-page { padding:16px 12px 24px; } .stepper { grid-template-columns:1fr 1fr; } .secondary-column { grid-template-columns:1fr; } }
   `]
 })
-export class ExamBuilderComponent {
+export class ExamBuilderComponent implements OnInit {
   readonly facade = inject(ExamBuilderFacade);
+  private readonly route = inject(ActivatedRoute, { optional: true });
+  private readonly successorNoteValidator: ValidatorFn = (control): ValidationErrors | null =>
+    this.facade.currentExam()?.status === 'published' &&
+    (typeof control.value === 'string' ? control.value.trim() : '').length === 0
+      ? { required: true }
+      : null;
   readonly form = new FormGroup({
     title: new FormControl('Untitled exam', { nonNullable: true, validators: [Validators.required] }),
     durationMinutes: new FormControl(60, { nonNullable: true, validators: [Validators.required, Validators.min(1), Validators.pattern(/^\d+$/)] }),
     rules: new FormControl('', { nonNullable: true }),
-    changeNote: new FormControl('', { nonNullable: true })
+    changeNote: new FormControl('', { nonNullable: true, validators: [this.successorNoteValidator] })
   });
   readonly publishConfirmationOpen = signal(false);
   readonly publishSubmissionLocked = signal(false);
   @ViewChild('publishTriggerButton') private publishTriggerButton?: ElementRef<HTMLButtonElement>;
   @ViewChild('publishConfirmationPanel') private publishConfirmationPanel?: ElementRef<HTMLElement>;
   private readonly renderInjector = inject(Injector);
+  private loadedRouteId: string | null = null;
   readonly unmetRows = computed(() => {
     const comparison = this.facade.comparison();
     return [...comparison.outcomeBuckets, ...comparison.difficultyBuckets, ...comparison.questionTypeBuckets].filter((row) => row.status !== 'met');
   });
+  readonly automaticSelectionState = computed(() => this.facade.autoSelectionState?.() ?? {
+    status: 'idle' as const,
+    selected: Object.freeze([]),
+    unmetReasons: Object.freeze([]),
+    message: 'Select deterministic published snapshots from the authorized question bank.'
+  });
+
+  ngOnInit(): void {
+    const id = this.route?.snapshot.paramMap.get('id')?.trim() ?? '';
+    if (id.length === 0 || this.loadedRouteId === id) return;
+    this.loadedRouteId = id;
+    this.facade.loadCurrent?.(id)?.subscribe({ error: () => undefined });
+  }
 
   summaryDescription(): string {
     const comparison = this.facade.comparison();
     return comparison.status === 'valid' ? 'All target count and point buckets match current coverage.' : 'Resolve the listed reasons before publishing; coverage is derived from pinned snapshots.';
   }
 
+  successorReasonRequired(): boolean {
+    return this.facade.currentExam()?.status === 'published';
+  }
+
+  successorReasonInvalid(): boolean {
+    return this.successorReasonRequired() && this.form.controls.changeNote.invalid && this.form.controls.changeNote.touched;
+  }
+
+  canAutomaticSelect(): boolean {
+    const autoSelect = this.facade.autoSelectQuestions;
+    const state = this.automaticSelectionState();
+    return typeof autoSelect === 'function' && this.facade.targetValid?.() !== false && !this.isBusy() && state.status !== 'loading';
+  }
+
+  automaticSelect(): void {
+    if (!this.canAutomaticSelect()) return;
+    this.facade.autoSelectQuestions().subscribe({ error: () => undefined });
+  }
+
+  retryAutomaticSelect(): void {
+    if (typeof this.facade.retryAutoSelection === 'function') {
+      this.facade.retryAutoSelection().subscribe({ error: () => undefined });
+      return;
+    }
+    this.automaticSelect();
+  }
+
   isBusy(): boolean {
     const status = this.facade.requestState().status;
-    return status === 'loading' || status === 'saving' || status === 'publishing';
+    return status === 'loading' || status === 'saving' || status === 'publishing' || this.automaticSelectionState().status === 'loading';
   }
 
   saveDraft(): void {
+    this.form.controls.changeNote.updateValueAndValidity({ emitEvent: false });
     this.form.markAllAsTouched();
     if (this.form.invalid || this.isBusy()) return;
     const values = this.form.getRawValue();
     this.facade.saveDraft({ title: values.title, durationMinutes: values.durationMinutes, rules: this.rulesFromText(values.rules), changeNote: values.changeNote }).subscribe({ error: () => undefined });
   }
+
 
   publish(): void {
     this.openPublishConfirmation();
@@ -276,5 +345,8 @@ export class ExamBuilderComponent {
   }
 
   trackByKey(_index: number, row: ExamBlueprintBucketComparison): string { return row.key; }
+  trackByReason(_index: number, reason: { readonly dimension: string; readonly key?: string }): string {
+    return `${reason.dimension}:${reason.key ?? ''}`;
+  }
   trackByVersion(_index: number, row: { readonly versionId: string }): string { return row.versionId; }
 }

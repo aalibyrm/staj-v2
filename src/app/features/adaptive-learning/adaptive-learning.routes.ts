@@ -138,14 +138,30 @@ export const adaptiveLearningRoutes: Routes = [
       title: 'Exam builder',
       [ROUTE_CAPABILITIES_DATA_KEY]: [
         ROUTE_CAPABILITIES.instructorTeaching,
-        ROUTE_CAPABILITIES.measurementWorkspace
+        ROUTE_CAPABILITIES.measurementWorkspace,
+        ROUTE_CAPABILITIES.programWorkspace
+      ]
+    },
+    loadComponent: loadExamBuilder
+  },
+  {
+    path: 'exams/:id/edit',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Edit exam',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.measurementWorkspace,
+        ROUTE_CAPABILITIES.programWorkspace
       ]
     },
     loadComponent: loadExamBuilder
   },
   placeholderRoute('exams', 'Exams', [
     ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.measurementWorkspace
+    ROUTE_CAPABILITIES.measurementWorkspace,
+    ROUTE_CAPABILITIES.programWorkspace
   ]),
   placeholderRoute('exam-session/:token', 'Exam session', [
     ROUTE_CAPABILITIES.studentLearning

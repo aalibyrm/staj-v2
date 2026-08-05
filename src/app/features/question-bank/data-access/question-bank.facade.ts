@@ -76,7 +76,7 @@ import {
   type QuestionVersion
 } from '../models/question.models';
 
-const AUTHORIZED_QUESTION_ROLES = Object.freeze(['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const);
+const AUTHORIZED_QUESTION_ROLES = Object.freeze(['INSTRUCTOR', 'MEASUREMENT_SPECIALIST', 'PROGRAM_MANAGER'] as const);
 const QUESTIONS_PER_COURSE = 18;
 const MAX_SEARCH_LENGTH = 120;
 const QUESTION_PAGE_SIZE_MAX = 50;

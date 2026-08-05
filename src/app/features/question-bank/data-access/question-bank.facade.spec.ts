@@ -12,7 +12,7 @@ import {
 } from './question-bank.facade';
 import { asQuestionId, asQuestionVersionId } from '../models/question.models';
 
-const signedIn = (role: 'INSTRUCTOR' | 'MEASUREMENT_SPECIALIST' | 'STUDENT'): SessionStore => {
+const signedIn = (role: 'INSTRUCTOR' | 'MEASUREMENT_SPECIALIST' | 'PROGRAM_MANAGER' | 'STUDENT'): SessionStore => {
   const account = DEMO_ACCOUNTS.find((candidate) => candidate.roleCode === role);
   if (account === undefined) throw new Error(`Missing account for ${role}.`);
   const store = new SessionStore();
@@ -40,6 +40,22 @@ describe('normalizeQuestionListQuery enum filters', () => {
     expect(normalizeQuestionListQuery({ status: 'invalid-status' }).status).toBe('');
     expect(normalizeQuestionListQuery({ type: 'invalid-type' }).type).toBe('');
   });
+});
+
+it('allows program managers to read only their granted course while students remain denied', async () => {
+  const repository = new QuestionBankRepository(new MockTransport());
+  const managerStore = signedIn('PROGRAM_MANAGER');
+  const managerSession = managerStore.session();
+  const courseGrant = managerSession?.account.scopeGrants.find((grant) => grant.kind === 'course');
+  const grantedCourseId = courseGrant?.kind === 'course' ? courseGrant.ids[0] : undefined;
+  if (grantedCourseId === undefined) throw new Error('Expected a program-manager course grant.');
+
+  const response = await firstValueFrom(repository.listQuestions({ status: 'published', pageSize: 50 }, { session: managerSession }));
+  expect(response.items.length).toBeGreaterThan(0);
+  expect(new Set(response.items.map((question) => String(question.courseId)))).toEqual(new Set([grantedCourseId]));
+  expect(response.items.every((question) => String(question.courseId) === grantedCourseId)).toBe(true);
+
+  await expect(firstValueFrom(repository.listQuestions({}, { session: signedIn('STUDENT').session() }))).rejects.toMatchObject({ kind: 'unauthorized' });
 });
 
 describe('QuestionBankRepository publish/version workflow', () => {

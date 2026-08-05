@@ -4,7 +4,8 @@ import { defer, map, type Observable } from 'rxjs';
 import { DEFAULT_MOCK_SCENARIO, MockTransport, type MockScenarioControls } from '../../../core/api/mock-transport';
 import { AuditPort, type AuditEventDraft } from '../../../core/observability/observability.ports';
 import { SessionStore } from '../../../core/auth/session.store';
-import { DATA_SCOPE_KINDS, ROLE_CODES, type AuthSession, type RoleCode } from '../../../core/auth/authorization';
+import { decideDataScopeAccess, DATA_SCOPE_KINDS, ROLE_CODES, type AuthSession, type RoleCode } from '../../../core/auth/authorization';
+import { createSeedData } from '../../adaptive-learning/data-access/seed-data.factory';
 import {
   asExamId,
   asExamVersionId,
@@ -44,6 +45,7 @@ export type ExamRepositorySnapshot = Readonly<{
 
 const WRITE_ROLES: readonly RoleCode[] = ['INSTRUCTOR', 'MEASUREMENT_SPECIALIST', 'PROGRAM_MANAGER'];
 const isWriteRole = (session: AuthSession | null): boolean => session !== null && WRITE_ROLES.includes(session.account.roleCode);
+const SEED_OUTCOME_COURSE_IDS = new Map(createSeedData().learningOutcomes.map((outcome) => [String(outcome.id), String(outcome.courseId)]));
 const now = (): string => new Date().toISOString();
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isAuthSession = (value: unknown): value is AuthSession => {
@@ -94,6 +96,8 @@ export class ExamRepository {
       const request = { method: 'POST' as const, url: '/exams', body: input };
       this.assertAuthorized(session, request.url);
       const id = asExamId(typeof input?.id === 'string' && input.id.trim().length > 0 ? input.id.trim() : `EXAM-${this.sequence++}`);
+      const blueprint = createExamBlueprint(input.blueprint);
+      this.assertExamScope(session, blueprint, snapshotsOf(input), id);
       const normalized = this.normalizeCreate(input, id, session);
       return this.execute(request.method, request.url, normalized, () => {
         if (this.currentEntities.has(id)) throw this.error('conflict', 'An exam with this ID already exists.', id);
@@ -109,7 +113,10 @@ export class ExamRepository {
 
   getCurrent(id: ExamId | string, options: ExamRepositoryOperationOptions = {}): Observable<Exam> {
     return defer(() => {
-      this.assertAuthorized(this.sessionFor(options), String(id));
+      const session = this.sessionFor(options);
+      this.assertAuthorized(session, String(id));
+      const current = this.currentEntities.get(asExamId(String(id)));
+      if (current !== undefined) this.assertExamScope(session, current.blueprint, current.questionVersions, id);
       return this.execute('GET', `/exams/${String(id)}`, undefined, () => {
         const exam = this.currentEntities.get(asExamId(String(id)));
         if (exam === undefined) throw this.error('not-found', 'The exam does not exist.', id);
@@ -124,7 +131,10 @@ export class ExamRepository {
 
   listVersionHistory(id: ExamId | string, options: ExamRepositoryOperationOptions = {}): Observable<readonly Exam[]> {
     return defer(() => {
-      this.assertAuthorized(this.sessionFor(options), String(id));
+      const session = this.sessionFor(options);
+      this.assertAuthorized(session, String(id));
+      const current = this.currentEntities.get(asExamId(String(id)));
+      if (current !== undefined) this.assertExamScope(session, current.blueprint, current.questionVersions, id);
       return this.execute('GET', `/exams/${String(id)}/versions`, undefined, () => {
         if (!this.currentEntities.has(asExamId(String(id)))) throw this.error('not-found', 'The exam does not exist.', id);
         return Object.freeze([...(this.publishedHistory.get(asExamId(String(id))) ?? [])].sort((left, right) => left.version - right.version).map(cloneExam));
@@ -147,6 +157,12 @@ export class ExamRepository {
       this.assertAuthorized(session, request.url);
       const current = this.currentEntities.get(asExamId(String(id)));
       if (current === undefined) throw this.error('not-found', 'The exam does not exist.', id);
+      const source = input as Record<string, unknown>;
+      const blueprint = createExamBlueprint(source['blueprint'] ?? current.blueprint);
+      const versions = source['questionVersions'] !== undefined || source['questionSnapshots'] !== undefined || source['pinnedQuestionVersions'] !== undefined
+        ? snapshotsOf(input)
+        : current.questionVersions;
+      this.assertExamScope(session, blueprint, versions, id);
       this.assertExpectedVersion(current, options.expectedVersion, id);
       if (current.status !== 'draft') throw this.error('immutable', 'Published exams cannot be edited directly; create an editable successor.', id);
       const normalized = this.normalizeUpdate(current, input, session);
@@ -174,6 +190,7 @@ export class ExamRepository {
       this.assertAuthorized(session, request.url);
       const current = this.currentEntities.get(asExamId(String(id)));
       if (current === undefined) throw this.error('not-found', 'The exam does not exist.', id);
+      this.assertExamScope(session, current.blueprint, current.questionVersions, id);
       this.assertExpectedVersion(current, options.expectedVersion, id);
       if (current.status !== 'draft') throw this.error('immutable', 'Only a draft exam can be published.', id);
       const issues = validateExamPublication(current.blueprint, current.questionVersions);
@@ -224,6 +241,7 @@ export class ExamRepository {
       if (note.length === 0) throw this.error('validation', 'A nonblank change note is required to create a successor.', id);
       const current = this.currentEntities.get(asExamId(String(id)));
       if (current === undefined) throw this.error('not-found', 'The exam does not exist.', id);
+      this.assertExamScope(session, current.blueprint, current.questionVersions, id);
       this.assertExpectedVersion(current, options.expectedVersion, id);
       if (current.status !== 'published') throw this.error('immutable', 'Only a published exam can create an editable successor.', id);
       return this.execute(request.method, request.url, { changeNote: note }, () => {
@@ -292,12 +310,35 @@ export class ExamRepository {
     return this.sessionStore.session();
   }
 
-  private assertAuthorized(session: AuthSession | null, id: string): void {
-    if (!isWriteRole(session)) throw this.error('unauthorized', 'You are not authorized to operate on exams.', id);
+  private assertExamScope(
+    session: AuthSession | null,
+    blueprint: ExamBlueprint | null,
+    questionVersions: readonly QuestionVersion[],
+    id: ExamId | string
+  ): void {
+    if (blueprint === null || blueprint.outcomeBuckets.length === 0) {
+      throw this.error('unauthorized', 'The exam has no authorized course scope.', id);
+    }
+    const courseIds = new Set<string>();
+    for (const outcome of blueprint.outcomeBuckets) {
+      const courseId = SEED_OUTCOME_COURSE_IDS.get(String(outcome.key));
+      if (courseId === undefined || courseId.trim().length === 0) {
+        throw this.error('unauthorized', 'The exam outcome has no authorized course scope.', id);
+      }
+      courseIds.add(courseId);
+    }
+    for (const snapshot of questionVersions) {
+      const courseId = typeof snapshot?.courseId === 'string' ? snapshot.courseId.trim() : '';
+      if (courseId.length === 0) throw this.error('unauthorized', 'A pinned question has no authorized course scope.', id);
+      courseIds.add(courseId);
+    }
+    if (courseIds.size === 0 || [...courseIds].some((courseId) => !decideDataScopeAccess(session, { kind: 'course', id: courseId }).allowed)) {
+      throw this.error('unauthorized', 'You are not authorized for every course represented by this exam.', id);
+    }
   }
 
-  private assertExpectedVersion(current: Exam, expected: number | undefined, id: ExamId | string): void {
-    if (!Number.isSafeInteger(expected) || expected !== current.version) throw this.error('conflict', 'The exam version is stale.', id);
+  private assertAuthorized(session: AuthSession | null, id: string): void {
+    if (!isWriteRole(session)) throw this.error('unauthorized', 'You are not authorized to operate on exams.', id);
   }
 
   private normalizeCreate(input: ExamCreateInput, id: ExamId, session: AuthSession | null): Exam {
@@ -351,6 +392,15 @@ export class ExamRepository {
     }
   }
 
+  private assertExpectedVersion(current: Exam, expectedVersion: number | undefined, id: ExamId | string): void {
+    if (expectedVersion === undefined || expectedVersion !== current.version) {
+      throw this.error(
+        'conflict',
+        `Exam ${current.id} changed elsewhere. Reload the exam before trying again.`,
+        id
+      );
+    }
+  }
   private execute<T>(method: 'GET' | 'POST' | 'PATCH', url: string, body: unknown, factory: () => T, options: ExamRepositoryOperationOptions): Observable<T> {
     const { expectedVersion: _expectedVersion, session: _session, ...controls } = options;
     return this.transport.execute({ method, url, body }, factory, { ...this.scenarioControls, ...controls }).pipe(map((response) => response.body));

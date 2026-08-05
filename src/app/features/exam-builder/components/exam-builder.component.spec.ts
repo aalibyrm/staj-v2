@@ -1,10 +1,10 @@
 import { By } from '@angular/platform-browser';
 import { TestBed } from '@angular/core/testing';
-import { signal } from '@angular/core';
+import { signal, type WritableSignal } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { NEVER, of, type Observable } from 'rxjs';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-
-import { ExamBuilderFacade } from '../data-access/exam-builder.facade';
+import { ExamBuilderFacade, type ExamAutomaticSelectionState } from '../data-access/exam-builder.facade';
 import { compareExamBlueprint, createExamBlueprint, type ExamBlueprintCurrentCoverageInput } from '../models/exam-blueprint.models';
 import type { Exam } from '../models/exam.models';
 import { asLearningOutcomeId } from '../../question-bank/models/question.models';
@@ -60,7 +60,15 @@ const publishExamStub = (publishExam: PublishExamStub): ExamBuilderFacade => {
   } as unknown as ExamBuilderFacade;
 };
 describe('ExamBuilderComponent', () => {
-  beforeEach(() => TestBed.configureTestingModule({ imports: [ExamBuilderComponent] }));
+  const routeParam = vi.fn(() => null as string | null);
+  beforeEach(() => {
+    routeParam.mockReset();
+    routeParam.mockReturnValue(null);
+    return TestBed.configureTestingModule({
+      imports: [ExamBuilderComponent],
+      providers: [{ provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: routeParam } } } }]
+    });
+  });
   const create = (facade?: ExamBuilderFacade) => {
     if (facade !== undefined) TestBed.overrideProvider(ExamBuilderFacade, { useValue: facade });
     const fixture = TestBed.createComponent(ExamBuilderComponent);
@@ -198,5 +206,68 @@ describe('ExamBuilderComponent', () => {
     expect(publishExam).toHaveBeenCalledTimes(1);
     expect(fixture.componentInstance.publishSubmissionLocked()).toBe(false);
     expect(document.activeElement).toBe(trigger);
+  });
+  it('invokes automatic selection and exposes retry for a retryable state', () => {
+    const autoState = signal<ExamAutomaticSelectionState>({
+      status: 'idle',
+      selected: Object.freeze([]),
+      unmetReasons: Object.freeze([]),
+      message: 'Ready'
+    });
+    const automaticSelect = vi.fn(() => of(autoState()));
+    const retryAutoSelection = vi.fn(() => of(autoState()));
+    const facade = Object.assign(publishExamStub(() => NEVER), {
+      autoSelectionState: autoState,
+      targetValid: signal(true),
+      autoSelectQuestions: automaticSelect,
+      retryAutoSelection
+    }) as unknown as ExamBuilderFacade;
+    const fixture = create(facade);
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll('button') as NodeListOf<HTMLButtonElement>);
+    const automaticButton = buttons.find((button) => button.textContent?.includes('Automatic select')) as HTMLButtonElement;
+
+    automaticButton.click();
+    expect(automaticSelect).toHaveBeenCalledTimes(1);
+    autoState.set({ status: 'error', selected: Object.freeze([]), unmetReasons: Object.freeze([]), message: 'Retry', retryable: true });
+    fixture.detectChanges();
+    const retryButton = (Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[]).find((button) => button.textContent?.trim() === 'Retry') as HTMLButtonElement;
+    retryButton.click();
+    expect(retryAutoSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a nonblank successor reason before calling the facade, but not for drafts', () => {
+    const facade = publishExamStub(() => NEVER);
+    const currentExam = facade.currentExam as unknown as WritableSignal<Exam | null>;
+    const current = currentExam();
+    currentExam.set({ ...(current as Exam), status: 'published' });
+    const saveDraft = vi.fn(() => NEVER);
+    const fixture = create(Object.assign(facade, { saveDraft }) as unknown as ExamBuilderFacade);
+    const note = fixture.nativeElement.querySelector('#successor-note') as HTMLTextAreaElement;
+
+    expect(note.required).toBe(true);
+    expect(note.getAttribute('aria-describedby')).toContain('successor-note-error');
+    fixture.componentInstance.saveDraft();
+    fixture.detectChanges();
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.querySelector('#successor-note-error')).not.toBeNull();
+  });
+
+  it('loads an edit route id once and does not load for the new route', () => {
+    const loadCurrent = vi.fn(() => of(undefined as unknown as Exam));
+    routeParam.mockReturnValue('EXAM-42');
+    create(Object.assign(publishExamStub(() => NEVER), { loadCurrent }) as unknown as ExamBuilderFacade);
+    expect(loadCurrent).toHaveBeenCalledTimes(1);
+    expect(loadCurrent).toHaveBeenCalledWith('EXAM-42');
+
+    TestBed.resetTestingModule();
+    routeParam.mockReset();
+    routeParam.mockReturnValue(null);
+    TestBed.configureTestingModule({
+      imports: [ExamBuilderComponent],
+      providers: [{ provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: routeParam } } } }]
+    });
+    const newLoadCurrent = vi.fn(() => of(undefined as unknown as Exam));
+    create(Object.assign(publishExamStub(() => NEVER), { loadCurrent: newLoadCurrent }) as unknown as ExamBuilderFacade);
+    expect(newLoadCurrent).not.toHaveBeenCalled();
   });
 });
