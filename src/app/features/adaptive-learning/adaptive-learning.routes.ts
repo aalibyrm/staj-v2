@@ -15,6 +15,10 @@ const loadOutcomeListEditor = () =>
   import('../learning-domain/components/outcome-list-editor.component').then(
     ({ OutcomeListEditorComponent }) => OutcomeListEditorComponent
   );
+const loadOutcomeGraph = () =>
+  import('../learning-domain/components/outcome-graph.component').then(
+    ({ OutcomeGraphComponent }) => OutcomeGraphComponent
+  );
 
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
@@ -73,7 +77,16 @@ export const adaptiveLearningRoutes: Routes = [
     },
     loadComponent: loadOutcomeListEditor
   },
-  placeholderRoute('outcomes/map', 'Outcomes map', [ROUTE_CAPABILITIES.programWorkspace]),
+  {
+    path: 'outcomes/map',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Outcomes map',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [ROUTE_CAPABILITIES.programWorkspace]
+    },
+    loadComponent: loadOutcomeGraph
+  },
   placeholderRoute('question-bank', 'Question bank', [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace

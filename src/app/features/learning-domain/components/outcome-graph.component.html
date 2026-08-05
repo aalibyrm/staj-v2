@@ -1,0 +1,243 @@
+<section class="outcome-map" aria-labelledby="outcome-map-heading">
+  <header class="page-heading">
+    <div>
+      <span class="eyebrow">Program manager workspace</span>
+      <h1 id="outcome-map-heading">Outcomes map</h1>
+      <p>Explore prerequisite relationships by course, level, and lifecycle status.</p>
+    </div>
+    <span class="availability-note" aria-label="Mastery data status">Mastery: Not available</span>
+  </header>
+
+  <p class="sr-only" role="status" aria-live="polite">{{ liveMessage() }}</p>
+
+  @if (isUnauthorized()) {
+    <section class="state-card state-card--denied" aria-labelledby="outcome-map-denied-heading">
+      <span class="state-symbol" aria-hidden="true">!</span>
+      <h2 id="outcome-map-denied-heading">Outcome map unavailable</h2>
+      <p>Your data scope does not allow access to courses, outcomes, or content.</p>
+    </section>
+  } @else if (isLoading()) {
+    <section class="state-card" aria-labelledby="outcome-map-loading-heading" aria-busy="true">
+      <span class="state-symbol" aria-hidden="true">…</span>
+      <h2 id="outcome-map-loading-heading">Loading outcome map</h2>
+      <p>Courses, outcomes, and related content are loading.</p>
+      <div class="loading-lines" aria-hidden="true"><span></span><span></span><span></span></div>
+    </section>
+  } @else if (isServiceError()) {
+    <section class="state-card state-card--error" aria-labelledby="outcome-map-error-heading">
+      <span class="state-symbol" aria-hidden="true">!</span>
+      <h2 id="outcome-map-error-heading">Unable to load outcome map</h2>
+      <p>Some learning-domain data could not be loaded. Retry without losing your filters.</p>
+      <button type="button" class="button button--secondary" (click)="retryLoad()">Retry loading</button>
+    </section>
+  } @else {
+    @if (feedbackMessage()) {
+      <div
+        id="outcome-graph-feedback"
+        class="feedback"
+        tabindex="-1"
+        [attr.role]="feedbackKind() === 'validation' || feedbackKind() === 'conflict' ? 'alert' : 'status'"
+        aria-live="{{ feedbackKind() === 'validation' || feedbackKind() === 'conflict' ? 'assertive' : 'polite' }}"
+      >
+        <strong>{{ feedbackKind() === 'validation' ? 'Cycle or validation failure' : feedbackKind() === 'conflict' ? 'Save conflict' : feedbackKind() === 'success' ? 'Saved' : 'Outcome map update' }}</strong>
+        <span>{{ feedbackMessage() }}</span>
+      </div>
+    }
+
+    <form class="filter-panel" [formGroup]="filterForm" (submit)="$event.preventDefault()">
+      <div class="filter-heading">
+        <div>
+          <span class="eyebrow">Find and focus</span>
+          <h2>Map filters</h2>
+        </div>
+        <span class="result-count" aria-label="Visible outcome count">{{ visibleNodes().length }} shown</span>
+      </div>
+      <div class="filter-grid">
+        <div class="field field--search">
+          <label for="outcome-map-search">Search outcomes</label>
+          <input id="outcome-map-search" type="search" formControlName="search" autocomplete="off" placeholder="Code, title, or description" />
+        </div>
+        <div class="field">
+          <label for="outcome-map-course">Course</label>
+          <select id="outcome-map-course" formControlName="courseId">
+            <option value="">All courses</option>
+            @for (course of courses(); track course.id) {
+              <option [value]="course.id">{{ course.code }} · {{ course.title }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="outcome-map-level">Level</label>
+          <select id="outcome-map-level" formControlName="level">
+            <option [ngValue]="null">All levels</option>
+            @for (level of levels(); track level) {
+              <option [ngValue]="level">Level {{ level }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="outcome-map-status">Lifecycle status</label>
+          <select id="outcome-map-status" formControlName="status">
+            <option value="">All statuses</option>
+            @for (status of lifecycleStates; track status) {
+              <option [value]="status">{{ statusLabel(status) }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="outcome-map-mastery">Mastery availability</label>
+          <select id="outcome-map-mastery" disabled aria-disabled="true" title="Mastery data is not available">
+            <option>Not available</option>
+          </select>
+        </div>
+        <button type="button" class="button button--secondary filter-reset" (click)="resetFilters()">Reset filters</button>
+      </div>
+    </form>
+
+    <section class="legend-panel" aria-labelledby="outcome-map-legend-heading">
+      <h2 id="outcome-map-legend-heading">Legend</h2>
+      <span class="legend-item"><span class="legend-symbol legend-symbol--edge" aria-hidden="true">→</span>Prerequisite relation</span>
+      <span class="legend-item"><span class="legend-symbol legend-symbol--selected" aria-hidden="true">▣</span>Selected outcome</span>
+      <span class="legend-item"><span class="legend-symbol legend-symbol--risk" aria-hidden="true">!</span>Review risk: lifecycle or dependency heuristic</span>
+      <span class="legend-item"><span class="legend-symbol legend-symbol--mastery" aria-hidden="true">—</span>Mastery: Not available</span>
+    </section>
+
+    @if (isEmpty() || visibleNodes().length === 0) {
+      <section class="state-card state-card--empty" aria-labelledby="outcome-map-empty-heading">
+        <span class="state-symbol" aria-hidden="true">∅</span>
+        <h2 id="outcome-map-empty-heading">No outcomes match these filters</h2>
+        <p>Adjust search, course, level, or lifecycle status to see related outcomes.</p>
+        <button type="button" class="button button--secondary" (click)="resetFilters()">Clear filters</button>
+      </section>
+    } @else {
+      <div class="map-layout">
+        <section class="visual-panel" aria-labelledby="outcome-map-visual-heading">
+          <header class="section-heading">
+            <div>
+              <span class="eyebrow">Relations</span>
+              <h2 id="outcome-map-visual-heading">Outcome relationships</h2>
+            </div>
+            <div class="view-toggle" role="group" aria-label="Outcome map view">
+              <button type="button" class="button button--secondary" [class.is-active]="viewMode() === 'list'" [attr.aria-pressed]="viewMode() === 'list'" (click)="setViewMode('list')">List view</button>
+              <button type="button" class="button button--secondary" [class.is-active]="viewMode() === 'graph'" [attr.aria-pressed]="viewMode() === 'graph'" (click)="setViewMode('graph')">Open graph</button>
+            </div>
+          </header>
+
+          @if (viewMode() === 'graph') {
+            <div class="graph-toolbar" role="toolbar" aria-label="Outcome graph controls">
+              <button type="button" class="icon-button" aria-label="Zoom in" (click)="zoomGraph('in')">+</button>
+              <button type="button" class="icon-button" aria-label="Zoom out" (click)="zoomGraph('out')">−</button>
+              <button type="button" class="icon-button" aria-label="Fit graph to view" (click)="fitGraph()">Fit</button>
+              <button type="button" class="icon-button" aria-label="Focus selected outcome" [disabled]="selectedOutcomeId() === null" (click)="focusSelectedGraph()">Focus</button>
+            </div>
+            <div #graphContainer class="graph-canvas" role="img" aria-label="Interactive directional outcome graph">
+              <p class="graph-summary">{{ visibleNodes().length }} outcomes · {{ graphModel().edges.length }} prerequisite relations. Use List view for the complete keyboard-accessible representation.</p>
+            </div>
+          } @else {
+            <p class="view-note" role="status">Accessible list view is active. Every relation and selection is available without the graph canvas.</p>
+          }
+
+          <div class="accessible-list" [class.accessible-list--graph-hidden]="viewMode() === 'graph'" aria-labelledby="outcome-map-list-heading">
+            <header class="list-heading">
+              <div>
+                <span class="eyebrow">Accessible alternative</span>
+                <h3 id="outcome-map-list-heading">Outcome list</h3>
+              </div>
+              <span>{{ visibleNodes().length }} outcomes</span>
+            </header>
+            <div class="table-scroll">
+              <table>
+                <caption class="sr-only">Outcomes and prerequisite relationships</caption>
+                <thead><tr><th scope="col">Outcome</th><th scope="col">Course / level</th><th scope="col">Status</th><th scope="col">Relations</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead>
+                <tbody>
+                  @for (node of visibleNodes(); track node.id) {
+                    <tr [class.is-selected]="selectedOutcomeId() === node.id">
+                      <th scope="row"><span class="code-text">{{ node.code }}</span><span>{{ node.title }}</span></th>
+                      <td>{{ node.courseLabel }}<br /><span class="muted-text">Level {{ node.level }}</span></td>
+                      <td><span class="status-text">Status: {{ statusLabel(node.status) }}</span></td>
+                      <td><span class="relation-text">{{ node.prerequisiteCount }} prerequisites · {{ node.dependentCount }} dependents</span></td>
+                      <td><button type="button" class="button button--secondary compact-button" [attr.aria-label]="'Select ' + node.code + ' ' + node.title" (click)="selectOutcome(node)">{{ selectedOutcomeId() === node.id ? 'Selected' : 'Select' }}</button></td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <aside class="inspector-panel" aria-labelledby="outcome-inspector-heading">
+          <header class="section-heading">
+            <div>
+              <span class="eyebrow">Selected outcome</span>
+              <h2 id="outcome-inspector-heading" tabindex="-1">Inspector</h2>
+            </div>
+          </header>
+          @if (selectedOutcome(); as selected) {
+            <div class="inspector-copy">
+              <div class="selected-title"><span class="code-text">{{ selected.code }}</span><h3>{{ selected.title }}</h3></div>
+              <p>{{ selected.description || 'No description provided.' }}</p>
+              <dl class="detail-grid">
+                <div><dt>Lifecycle</dt><dd>Status: {{ statusLabel(selected.status) }}</dd></div>
+                <div><dt>Level</dt><dd>Level {{ selected.level }}</dd></div>
+                <div><dt>Mastery</dt><dd>Not available</dd></div>
+                <div><dt>Affected outcomes</dt><dd>{{ selected.affectedCount }}</dd></div>
+              </dl>
+            </div>
+            <form class="relation-editor" (submit)="$event.preventDefault(); savePrerequisites()">
+              <label for="outcome-prerequisites">Prerequisites for {{ selected.code }} · {{ selected.title }}</label>
+              <select id="outcome-prerequisites" multiple size="5" [formControl]="prerequisiteControl" [disabled]="!canEditRelations()" aria-describedby="outcome-prerequisites-help">
+                @for (candidate of prerequisiteCandidates(); track candidate.id) {
+                  <option [value]="candidate.id">{{ candidate.code }} · {{ candidate.title }}</option>
+                }
+              </select>
+              <p id="outcome-prerequisites-help" class="muted-text">Only same-course outcomes are offered; the selected outcome is excluded.</p>
+              <button type="submit" class="button button--primary" [disabled]="!canEditRelations()">{{ isSaving() ? 'Saving…' : 'Save relationships' }}</button>
+            </form>
+            <section class="relation-summary" aria-labelledby="selected-relations-heading">
+              <h3 id="selected-relations-heading">Relationship summary</h3>
+              <p><strong>Prerequisites:</strong> {{ selected.prerequisiteCount }}</p>
+              <p><strong>Dependents:</strong> {{ selected.dependentCount }}</p>
+              <p class="muted-text">Mastery: Not available. No mastery source is connected.</p>
+            </section>
+            <section class="content-summary" aria-labelledby="selected-content-heading">
+              <h3 id="selected-content-heading">Related content</h3>
+              @if (selected.content.length === 0) {
+                <p class="muted-text">No content items are related to this outcome.</p>
+              } @else {
+                <ul>
+                  @for (item of selected.content; track item.id) {
+                    <li><span>{{ item.title }}</span><span class="muted-text">{{ item.format }} · {{ item.durationMinutes }} min</span></li>
+                  }
+                </ul>
+              }
+            </section>
+          } @else {
+            <div class="no-selection"><span class="state-symbol" aria-hidden="true">○</span><h3>No outcome selected</h3><p>Select a node or use Select in the accessible list to inspect and edit relationships.</p></div>
+          }
+        </aside>
+      </div>
+
+      <section class="risk-panel" aria-labelledby="outcome-risk-heading">
+        <header class="section-heading">
+          <div><span class="eyebrow">Dependency review</span><h2 id="outcome-risk-heading">Risky nodes</h2></div>
+          <span>{{ riskyNodes().length }} flagged by deterministic lifecycle/dependency rules</span>
+        </header>
+        @if (riskyNodes().length === 0) {
+          <p class="empty-inline">No outcomes meet the current review heuristic.</p>
+        } @else {
+          <div class="table-scroll">
+            <table>
+              <caption class="sr-only">Outcome nodes needing lifecycle or dependency review</caption>
+              <thead><tr><th scope="col">Outcome</th><th scope="col">Reason</th><th scope="col">Status</th><th scope="col">Affected</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead>
+              <tbody>
+                @for (node of riskyNodes(); track node.id) {
+                  <tr><th scope="row"><span class="code-text">{{ node.code }}</span><span>{{ node.title }}</span></th><td><span class="risk-text">! {{ node.riskLabel }}</span></td><td><span class="status-text">Status: {{ statusLabel(node.status) }}</span></td><td>{{ node.affectedCount }}</td><td><button type="button" class="button button--secondary compact-button" (click)="selectOutcome(node)">Inspect</button></td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </section>
+    }
+  }
+</section>

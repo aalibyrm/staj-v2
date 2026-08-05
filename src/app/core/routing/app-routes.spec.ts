@@ -14,6 +14,7 @@ import { SessionStore } from '../auth/session.store';
 import { UnauthorizedPageComponent } from '../../shared/components/unauthorized-page.component';
 import { RoutePlaceholderComponent } from '../../shared/components/route-placeholder.component';
 import { OutcomeListEditorComponent } from '../../features/learning-domain/components/outcome-list-editor.component';
+import { OutcomeGraphComponent } from '../../features/learning-domain/components/outcome-graph.component';
 import { adaptiveLearningRoutes } from '../../features/adaptive-learning/adaptive-learning.routes';
 
 @Component({
@@ -144,7 +145,7 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
@@ -153,7 +154,7 @@ describe('application routes', () => {
     }
   });
 
-  it('lazy-loads the guarded outcomes editor and leaves the map placeholder unchanged', async () => {
+  it('lazy-loads the guarded outcomes editor and map while leaving /outcomes unchanged', async () => {
     const outcomesRoute = adaptiveLearningRoutes.find((route) => route.path === 'outcomes');
     const mapRoute = adaptiveLearningRoutes.find((route) => route.path === 'outcomes/map');
 
@@ -173,7 +174,7 @@ describe('application routes', () => {
     expect(mapRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
       ROUTE_CAPABILITIES.programWorkspace
     ]);
-    expect(await mapRoute?.loadComponent?.()).toBe(RoutePlaceholderComponent);
+    expect(await mapRoute?.loadComponent?.()).toBe(OutcomeGraphComponent);
   });
 
   it('keeps the dashboard reachable for every canonical role', async () => {
