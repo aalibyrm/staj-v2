@@ -139,6 +139,61 @@ export type QuestionCreateInput = Readonly<QuestionEditableFields & {
 export type QuestionUpdateInput = Readonly<Partial<QuestionEditableFields> & {
   readonly status?: EditableQuestionStatus;
 }>;
+export type QuestionBulkTarget = Readonly<{
+  readonly id: QuestionId;
+  readonly expectedVersion: number;
+}>;
+
+export type QuestionBulkActionInput = Readonly<{
+  readonly addTags?: readonly string[];
+  readonly replaceTags?: readonly string[];
+  readonly status?: EditableQuestionStatus;
+}>;
+
+export type QuestionBulkRequest = Readonly<{
+  readonly targets: readonly QuestionBulkTarget[];
+  readonly action: QuestionBulkActionInput;
+}>;
+
+export type QuestionBulkFailureCode =
+  | 'not-found'
+  | 'unauthorized'
+  | 'validation'
+  | 'conflict'
+  | 'not-editable';
+
+export type QuestionBulkSuccess = Readonly<{
+  readonly kind: 'success';
+  readonly id: QuestionId;
+  readonly expectedVersion: number;
+  readonly before: Question;
+  readonly after: Question;
+  readonly question: Question;
+}>;
+
+export type QuestionBulkFailure = Readonly<{
+  readonly kind: 'failure';
+  readonly id: QuestionId;
+  readonly expectedVersion: number;
+  readonly code: QuestionBulkFailureCode;
+  readonly message: string;
+}>;
+
+export type QuestionBulkItemResult = QuestionBulkSuccess | QuestionBulkFailure;
+
+export type QuestionBulkCounts = Readonly<{
+  readonly total: number;
+  readonly succeeded: number;
+  readonly failed: number;
+}>;
+
+export type QuestionBulkResult = Readonly<{
+  readonly items: readonly QuestionBulkItemResult[];
+  readonly successes: readonly QuestionBulkSuccess[];
+  readonly failures: readonly QuestionBulkFailure[];
+  readonly counts: QuestionBulkCounts;
+}>;
+
 
 export type QuestionEditorMode = 'create' | 'edit' | 'preview';
 

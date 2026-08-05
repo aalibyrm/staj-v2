@@ -1,7 +1,8 @@
 import { Injectable, Optional, computed, signal, type Signal } from '@angular/core';
 import { defer, of, throwError, type Observable } from 'rxjs';
-import { catchError, map, tap } from 'rxjs/operators';
+import { catchError, map, switchMap, tap } from 'rxjs/operators';
 
+import { AuditPort, type AuditEventDraft } from '../../../core/observability/observability.ports';
 import { ApiTransportError, normalizeApplicationError } from '../../../core/api/api-error';
 import {
   DEFAULT_MOCK_SCENARIO,
@@ -63,6 +64,15 @@ import {
   type QuestionSuccessorInput,
   type QuestionType,
   type QuestionUpdateInput,
+  type QuestionBulkActionInput,
+  type QuestionBulkFailure,
+  type QuestionBulkItemResult,
+  type QuestionBulkRequest,
+  type QuestionBulkResult,
+  type QuestionBulkSuccess,
+  type QuestionBulkTarget,
+  type EditableQuestionStatus,
+  type QuestionBulkFailureCode,
   type QuestionVersion
 } from '../models/question.models';
 
@@ -126,6 +136,20 @@ export interface QuestionBankSaveRequestState {
   readonly questionId?: QuestionId;
   readonly retryable?: boolean;
 }
+export type QuestionBankBulkStatus =
+  | 'idle'
+  | 'pending'
+  | 'success'
+  | 'partial'
+  | 'error'
+  | 'unauthorized';
+
+export interface QuestionBankBulkRequestState {
+  readonly status: QuestionBankBulkStatus;
+  readonly message?: string;
+  readonly retryable?: boolean;
+}
+
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -566,6 +590,7 @@ const freezeResponse = (
 @Injectable({ providedIn: 'root' })
 export class QuestionBankRepository {
   private readonly transport: MockTransport;
+  private readonly audit: AuditPort | null;
   private readonly questionEntities = new Map<QuestionId, Question>();
   private readonly questionVersionEntities = new Map<QuestionId, Map<number, QuestionVersion>>();
   private readonly courseEntities = new Map<string, QuestionCourseReference>();
@@ -574,8 +599,12 @@ export class QuestionBankRepository {
   private scenarioControls: MockScenarioControls = { ...DEFAULT_MOCK_SCENARIO };
   private questionSequence = 1;
 
-  constructor(@Optional() transport: MockTransport | null = null) {
+  constructor(
+    @Optional() transport: MockTransport | null = null,
+    @Optional() audit: AuditPort | null = null
+  ) {
     this.transport = transport ?? new MockTransport();
+    this.audit = audit;
     const seed = createQuestionSeedData();
     for (const question of seed.questions) {
       const retained = cloneQuestion(question);
@@ -1011,6 +1040,46 @@ export class QuestionBankRepository {
     });
   }
 
+  bulkUpdateQuestions(
+    request: QuestionBulkRequest,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<QuestionBulkResult> {
+    return defer(() => {
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      const normalized = this.normalizeBulkRequest(request);
+      const transportRequest = {
+        method: 'PATCH' as const,
+        url: '/question-bank/questions/bulk',
+        body: normalized
+      };
+      if (access === null) {
+        return this.transport.execute(
+          transportRequest,
+          () => {
+            throw new QuestionBankError(
+              'unauthorized',
+              'You are not authorized to modify questions in the active course scope.'
+            );
+          },
+          { ...controls, outcome: 'unauthorized' }
+        ).pipe(map(({ body }) => body));
+      }
+
+      return this.transport.execute(
+        transportRequest,
+        () => {
+          const results: QuestionBulkItemResult[] = [];
+          for (const target of normalized.targets) {
+            results.push(this.processBulkTarget(target, normalized.action, access, options));
+          }
+          return this.freezeBulkResult(results);
+        },
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
   publishQuestion(
     id: QuestionId | string,
     input: QuestionPublishInput = {},
@@ -1202,6 +1271,211 @@ export class QuestionBankRepository {
     } = options;
     return { ...this.scenarioControls, ...controls };
   }
+
+  private normalizeBulkRequest(request: QuestionBulkRequest): Readonly<{
+    readonly targets: readonly QuestionBulkTarget[];
+    readonly action: QuestionBulkActionInput;
+  }> {
+    if (!isRecord(request)) {
+      throw new QuestionBankError('validation', 'Bulk question input must be an object.');
+    }
+    const rawTargets = request['targets'];
+    if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
+      throw new QuestionBankError('validation', 'Select at least one question for a bulk operation.');
+    }
+    const targets: QuestionBulkTarget[] = [];
+    const seenIds = new Set<string>();
+    for (const rawTarget of rawTargets) {
+      const target = isRecord(rawTarget) ? rawTarget : {};
+      const rawId = typeof target['id'] === 'string' ? target['id'].trim() : '';
+      if (seenIds.has(rawId)) {
+        continue;
+      }
+      seenIds.add(rawId);
+      const expectedVersion = typeof target['expectedVersion'] === 'number' &&
+        Number.isInteger(target['expectedVersion']) &&
+        target['expectedVersion'] > 0
+        ? target['expectedVersion']
+        : 0;
+      targets.push(Object.freeze({
+        id: asQuestionId(rawId),
+        expectedVersion
+      }));
+    }
+
+    const rawAction = isRecord(request['action']) ? request['action'] : null;
+    if (rawAction === null) {
+      throw new QuestionBankError('validation', 'A bulk tag or status action is required.');
+    }
+    const hasAddTags = rawAction['addTags'] !== undefined;
+    const hasReplaceTags = rawAction['replaceTags'] !== undefined;
+    if (hasAddTags && hasReplaceTags) {
+      throw new QuestionBankError('validation', 'Choose tag addition or tag replacement, not both.');
+    }
+    const addTags = hasAddTags ? this.normalizeTags(rawAction['addTags']) : undefined;
+    const replaceTags = hasReplaceTags ? this.normalizeTags(rawAction['replaceTags']) : undefined;
+    const rawStatus = rawAction['status'];
+    if (
+      rawStatus !== undefined &&
+      rawStatus !== 'draft' &&
+      rawStatus !== 'review'
+    ) {
+      throw new QuestionBankError('validation', 'Bulk status must be draft or review.');
+    }
+    if (!hasAddTags && !hasReplaceTags && rawStatus === undefined) {
+      throw new QuestionBankError('validation', 'A bulk tag or status action is required.');
+    }
+
+    const action: QuestionBulkActionInput = {
+      ...(addTags === undefined ? {} : { addTags }),
+      ...(replaceTags === undefined ? {} : { replaceTags }),
+      ...(rawStatus === undefined ? {} : { status: rawStatus as EditableQuestionStatus })
+    };
+    return Object.freeze({
+      targets: Object.freeze(targets),
+      action: Object.freeze(action)
+    });
+  }
+
+  private processBulkTarget(
+    target: QuestionBulkTarget,
+    action: QuestionBulkActionInput,
+    access: NormalizedQuestionAccess,
+    options: QuestionBankRequestOptions
+  ): QuestionBulkItemResult {
+    if (String(target.id).trim().length === 0 || target.expectedVersion <= 0) {
+      return this.bulkFailure(target, 'validation', 'A question ID and positive expected version are required.');
+    }
+    const current = this.questionEntities.get(target.id);
+    if (current === undefined) {
+      return this.bulkFailure(target, 'not-found', 'The selected question is no longer available in this scope.');
+    }
+    if (!access.courseIds.includes(String(current.courseId))) {
+      return this.bulkFailure(target, 'unauthorized', 'You are not authorized to modify this question in the active course scope.');
+    }
+    if (current.status === 'published' || current.status === 'archived') {
+      return this.bulkFailure(
+        target,
+        'not-editable',
+        'Published and archived questions are immutable and cannot receive bulk edits.'
+      );
+    }
+    if (target.expectedVersion !== current.version) {
+      return this.bulkFailure(
+        target,
+        'conflict',
+        `Question ${current.id} changed elsewhere. Reload the question before trying again.`
+      );
+    }
+
+    try {
+      const nextTags = action.replaceTags !== undefined
+        ? this.normalizeTags(action.replaceTags)
+        : action.addTags !== undefined
+          ? this.normalizeTags([...current.tags, ...action.addTags])
+          : current.tags;
+      const nextStatus = action.status ?? current.status;
+      const tagsChanged = current.tags.length !== nextTags.length ||
+        current.tags.some((tag, index) => tag !== nextTags[index]);
+      if (!tagsChanged && nextStatus === current.status) {
+        return this.bulkFailure(target, 'validation', 'The requested bulk action would not change this question.');
+      }
+      const before = cloneQuestion(current);
+      const occurredAt = new Date().toISOString();
+      const next = deepFreeze({
+        ...current,
+        tags: nextTags,
+        status: nextStatus,
+        updatedAt: occurredAt,
+        version: current.version + 1
+      }) as Question;
+      this.questionEntities.set(current.id, next);
+      this.recordBulkAudit(before, next, occurredAt, options);
+      const after = cloneQuestion(next);
+      return {
+        kind: 'success',
+        id: current.id,
+        expectedVersion: target.expectedVersion,
+        before,
+        after,
+        question: after
+      };
+    } catch (error: unknown) {
+      const code: QuestionBulkFailureCode = error instanceof QuestionBankError ? error.code : 'validation';
+      const message = error instanceof Error ? error.message : 'The bulk action could not be applied.';
+      return this.bulkFailure(target, code, message);
+    }
+  }
+
+  private bulkFailure(
+    target: QuestionBulkTarget,
+    code: QuestionBulkFailureCode,
+    message: string
+  ): QuestionBulkFailure {
+    return Object.freeze({
+      kind: 'failure',
+      id: target.id,
+      expectedVersion: target.expectedVersion,
+      code,
+      message
+    });
+  }
+
+  private freezeBulkResult(results: readonly QuestionBulkItemResult[]): QuestionBulkResult {
+    const items = Object.freeze([...results]);
+    const successes = Object.freeze(
+      results.filter((result): result is QuestionBulkSuccess => result.kind === 'success')
+    );
+    const failures = Object.freeze(
+      results.filter((result): result is QuestionBulkFailure => result.kind === 'failure')
+    );
+    return deepFreeze({
+      items,
+      successes,
+      failures,
+      counts: Object.freeze({
+        total: items.length,
+        succeeded: successes.length,
+        failed: failures.length
+      })
+    });
+  }
+
+  private recordBulkAudit(
+    before: Question,
+    after: Question,
+    occurredAt: string,
+    options: QuestionBankRequestOptions
+  ): void {
+    if (this.audit === null) {
+      return;
+    }
+    const event: AuditEventDraft = {
+      action: 'question.bulk-update',
+      actor: String(options.session?.accountId ?? 'unknown-account'),
+      targetType: 'question',
+      targetId: String(after.id),
+      occurredAt,
+      before: {
+        status: before.status,
+        tags: before.tags,
+        version: before.version,
+        updatedAt: before.updatedAt
+      },
+      after: {
+        status: after.status,
+        tags: after.tags,
+        version: after.version,
+        updatedAt: after.updatedAt
+      }
+    };
+    try {
+      void Promise.resolve(this.audit.record(event)).catch(() => undefined);
+    } catch {
+      return;
+    }
+  }
+
 
   private unauthorizedWrite<TRequest extends { readonly method: 'POST' | 'PATCH'; readonly url: string; readonly body: unknown }>(
     request: TRequest,
@@ -1498,6 +1772,8 @@ export class QuestionBankFacade {
   private readonly writableCourseOptions = signal<readonly QuestionCourseReference[]>([]);
   private readonly writableOutcomeOptions = signal<readonly QuestionOutcomeReference[]>([]);
   private readonly writableSaveRequestState = signal<QuestionBankSaveRequestState>({ status: 'idle' });
+  private readonly writableBulkRequestState = signal<QuestionBankBulkRequestState>({ status: 'idle' });
+  private readonly writableBulkResult = signal<QuestionBulkResult | null>(null);
   private readonly writableVersionHistory = signal<readonly QuestionVersion[]>([]);
   private lastQuery: QuestionListQuery = normalizeQuestionListQuery();
 
@@ -1512,6 +1788,9 @@ export class QuestionBankFacade {
   readonly outcomeOptions: Signal<readonly QuestionOutcomeReference[]> = this.writableOutcomeOptions.asReadonly();
   readonly saveRequestState: Signal<QuestionBankSaveRequestState> = this.writableSaveRequestState.asReadonly();
   readonly saveState: Signal<QuestionBankSaveRequestState> = this.saveRequestState;
+  readonly bulkRequestState: Signal<QuestionBankBulkRequestState> = this.writableBulkRequestState.asReadonly();
+  readonly bulkState: Signal<QuestionBankBulkRequestState> = this.bulkRequestState;
+  readonly bulkResult: Signal<QuestionBulkResult | null> = this.writableBulkResult.asReadonly();
   readonly versionHistory: Signal<readonly QuestionVersion[]> = this.writableVersionHistory.asReadonly();
   readonly saveFeedback = computed(() => this.saveRequestState().message ?? '');
   readonly editorReferences = computed<QuestionEditorReferenceData>(() => ({
@@ -1525,6 +1804,7 @@ export class QuestionBankFacade {
   readonly currentPage = computed(() => this.pageResult()?.page ?? DEFAULT_QUESTION_PAGE);
   readonly totalPages = computed(() => this.pageResult()?.totalPages ?? 0);
   readonly errorMessage = computed(() => this.requestState().message ?? '');
+  readonly bulkFeedback = computed(() => this.bulkRequestState().message ?? '');
 
   constructor(
     @Optional() repository: QuestionBankRepository | null = null,
@@ -1670,6 +1950,48 @@ export class QuestionBankFacade {
     }));
   }
 
+  bulkUpdateQuestions(
+    request: QuestionBulkRequest,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<QuestionBulkResult> {
+    const previousSelected = this.writableSelectedQuestion();
+    const requestOptions = {
+      ...this.sessionOptions(),
+      ...options
+    };
+    this.writableBulkRequestState.set({ status: 'pending' });
+    this.writableBulkResult.set(null);
+    return defer(() => this.repository.bulkUpdateQuestions(request, requestOptions)).pipe(
+      switchMap((result) => {
+        this.writableBulkResult.set(result);
+        return defer(() => this.repository.listQuestions(this.lastQuery, requestOptions)).pipe(
+          tap((response) => this.applyBulkRefresh(response, result, previousSelected)),
+          map(() => result)
+        );
+      }),
+      tap((result) => {
+        const { succeeded, failed } = result.counts;
+        this.writableBulkRequestState.set({
+          status: failed === 0 ? 'success' : 'partial',
+          message: failed === 0
+            ? `${succeeded} question${succeeded === 1 ? '' : 's'} updated successfully.`
+            : `${succeeded} question${succeeded === 1 ? '' : 's'} updated; ${failed} failed.`
+        });
+      }),
+      catchError((error: unknown) => {
+        const normalized = normalizeApplicationError(error);
+        const unauthorized = error instanceof QuestionBankError && error.code === 'unauthorized' ||
+          normalized.kind === 'unauthorized';
+        this.writableBulkRequestState.set({
+          status: unauthorized ? 'unauthorized' : 'error',
+          message: error instanceof QuestionBankError ? error.message : normalized.userMessage,
+          retryable: normalized.retryable
+        });
+        return throwError(() => error);
+      })
+    );
+  }
+
   publishQuestion(
     id: QuestionId | string,
     input: QuestionPublishInput = {},
@@ -1729,6 +2051,35 @@ export class QuestionBankFacade {
 
   resetMockScenario(): void {
     this.repository.resetMockScenario();
+  }
+
+  private applyBulkRefresh(
+    response: QuestionListResponse,
+    result: QuestionBulkResult,
+    selectedBefore: Question | null
+  ): void {
+    this.lastQuery = response.query;
+    this.writablePageResult.set(response);
+    this.writableRequestState.set({
+      status: response.total === 0 ? 'empty' : 'success'
+    });
+    if (selectedBefore === null) {
+      return;
+    }
+    const selectedResult = result.items.find((item) => item.id === selectedBefore.id);
+    if (selectedResult?.kind === 'success') {
+      this.setSelectedQuestion(selectedResult.after);
+      return;
+    }
+    if (
+      selectedResult?.kind === 'failure' &&
+      (selectedResult.code === 'not-found' || selectedResult.code === 'unauthorized')
+    ) {
+      this.clearSelection('Selection cleared because the question is missing or outside the active scope.');
+      return;
+    }
+    const refreshed = response.items.find((question) => question.id === selectedBefore.id);
+    this.setSelectedQuestion(refreshed ?? selectedBefore);
   }
 
   private writeQuestion(

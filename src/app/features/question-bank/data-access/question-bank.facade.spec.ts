@@ -2,13 +2,14 @@ import { firstValueFrom } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 
 import { MockTransport } from '../../../core/api/mock-transport';
+import { AuditPort } from '../../../core/observability/observability.ports';
 import { DEMO_ACCOUNTS } from '../../../core/auth/authorization';
 import { SessionStore } from '../../../core/auth/session.store';
 import {
   QuestionBankFacade,
   QuestionBankRepository
 } from './question-bank.facade';
-import { asQuestionVersionId } from '../models/question.models';
+import { asQuestionId, asQuestionVersionId } from '../models/question.models';
 
 const signedIn = (role: 'INSTRUCTOR' | 'MEASUREMENT_SPECIALIST' | 'STUDENT'): SessionStore => {
   const account = DEMO_ACCOUNTS.find((candidate) => candidate.roleCode === role);
@@ -195,5 +196,61 @@ describe('QuestionBankFacade publish/version workflow', () => {
     expect(facade.statusCounts().draft).toBe(initialCounts.draft);
     expect(facade.statusCounts().published).toBe(initialCounts.published);
     expect(Object.values(facade.statusCounts()).reduce((sum, count) => sum + count, 0)).toBe(initialStatusTotal);
+  });
+});
+
+describe('QuestionBankRepository bulk operations', () => {
+  it('keeps deterministic partial results, protects immutable rows, normalizes tags, and audits successes only', async () => {
+    const events: unknown[] = [];
+    const audit = { record: (event: unknown): void => { events.push(event); } } as unknown as AuditPort;
+    const repository = new QuestionBankRepository(new MockTransport(), audit);
+    const session = signedIn('INSTRUCTOR').session();
+    const rows = (await firstValueFrom(repository.listQuestions({ pageSize: 50 }, { session }))).items;
+    const first = rows.find((question) => question.status === 'draft');
+    const stale = rows.find((question) => question.status === 'review');
+    const published = rows.find((question) => question.status === 'published');
+    const archived = rows.find((question) => question.status === 'archived');
+    if (first === undefined || stale === undefined || published === undefined || archived === undefined) {
+      throw new Error('Expected editable, published, and archived seed rows.');
+    }
+    const result = await firstValueFrom(repository.bulkUpdateQuestions({
+      targets: [
+        { id: first.id, expectedVersion: first.version },
+        { id: first.id, expectedVersion: first.version },
+        { id: stale.id, expectedVersion: stale.version + 1 },
+        { id: published.id, expectedVersion: published.version },
+        { id: archived.id, expectedVersion: archived.version },
+        { id: asQuestionId('QUESTION-MISSING'), expectedVersion: 1 }
+      ],
+      action: { addTags: [' bulk ', 'Bulk'] }
+    }, { session }));
+
+    expect(result.items.map((item) => item.id)).toEqual([first.id, stale.id, published.id, archived.id, 'QUESTION-MISSING']);
+    expect(result.counts).toEqual({ total: 5, succeeded: 1, failed: 4 });
+    expect(result.successes[0]?.after.tags).toContain('bulk');
+    expect(result.failures.map((failure) => failure.code)).toEqual(['conflict', 'not-editable', 'not-editable', 'not-found']);
+    expect(events).toHaveLength(1);
+    expect(repository.getSnapshot().questions.find((question) => question.id === published.id)).toEqual(published);
+    expect(repository.getSnapshot().questions.find((question) => question.id === archived.id)).toEqual(archived);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+});
+
+describe('QuestionBankFacade bulk operations', () => {
+  it('refreshes the current query and keeps a valid inspector selection after success', async () => {
+    const store = signedIn('INSTRUCTOR');
+    const facade = new QuestionBankFacade(new QuestionBankRepository(new MockTransport()), store);
+    const page = await firstValueFrom(facade.loadQuestions({ search: 'foundations', pageSize: 50 }));
+    const draft = page.items.find((question) => question.status === 'draft');
+    if (draft === undefined) throw new Error('Expected a draft question.');
+    await firstValueFrom(facade.selectQuestion(draft.id));
+    const result = await firstValueFrom(facade.bulkUpdateQuestions({
+      targets: [{ id: draft.id, expectedVersion: draft.version }],
+      action: { status: 'review' }
+    }));
+    expect(result.counts).toEqual({ total: 1, succeeded: 1, failed: 0 });
+    expect(facade.bulkRequestState().status).toBe('success');
+    expect(facade.pageResult()?.query.search).toBe('foundations');
+    expect(facade.selectedQuestion()).toMatchObject({ id: draft.id, status: 'review' });
   });
 });

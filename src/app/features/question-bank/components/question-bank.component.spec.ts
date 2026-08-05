@@ -20,6 +20,8 @@ import {
   asQuestionId,
   type Question,
   type QuestionBankRequestState,
+  type QuestionBulkRequest,
+  type QuestionBulkResult,
   type QuestionId,
   type QuestionListQuery,
   type QuestionListResponse,
@@ -182,6 +184,8 @@ const testQuestion: Question = {
   options: [{ id: 'option-a', label: 'The supported answer' }],
   answer: { kind: 'choice', optionIds: ['option-a'] }
 };
+const bulkReviewQuestion: Question = { ...testQuestion, id: asQuestionId('QUESTION-TEST-101-REVIEW'), status: 'review' };
+const bulkArchivedQuestion: Question = { ...testQuestion, id: asQuestionId('QUESTION-TEST-101-ARCHIVED'), status: 'archived' };
 
 const testStatusCounts: QuestionStatusCounts = Object.freeze({
   draft: 2,
@@ -220,6 +224,7 @@ class DeterministicQuestionBankFacade {
   readonly courseOptions = signal<readonly Question['course'][]>([testQuestion.course]);
   mode: TestRequestMode = 'success';
   selectionMode: 'valid' | 'stale' = 'valid';
+  readonly bulkUpdateResult$ = new Subject<QuestionBulkResult>();
 
   readonly loadQuestions = vi.fn((query: QuestionListQuery): Observable<QuestionListResponse> => {
     this.requestState.set({ status: 'loading' });
@@ -270,6 +275,7 @@ class DeterministicQuestionBankFacade {
   readonly saveFeedback = signal('');
   readonly loadQuestionVersionHistory = vi.fn((_id: QuestionId): Observable<readonly never[]> => of([]));
   readonly publishQuestion = vi.fn((_id: QuestionId, _input: unknown, _options: unknown): Observable<Question> => of(testQuestion));
+  readonly bulkUpdateQuestions = vi.fn((_request: QuestionBulkRequest): Observable<QuestionBulkResult> => this.bulkUpdateResult$);
   readonly createQuestionSuccessor = vi.fn((_id: QuestionId, _input: unknown, _options: unknown): Observable<Question> => {
     const draft = { ...testQuestion, status: 'draft' as const, version: testQuestion.version + 1 };
     this.selectedId.set(draft.id);
@@ -450,4 +456,122 @@ describe('QuestionBankComponent', () => {
     expect(fixture.componentInstance.editorOpen()).toBe(true);
     expect(fixture.componentInstance.editingQuestionId()).toBe(testQuestion.id);
   });
+  it('selects current-page rows, requires a valid action, and restores focus after cancellation', () => {
+    const fixture = create();
+    const component = fixture.componentInstance;
+    component.toggleQuestionSelection(testQuestion, true);
+    fixture.detectChanges();
+    expect(component.selectedQuestionCount()).toBe(1);
+    expect(fixture.nativeElement.querySelector('.bulk-action-bar')?.textContent).toContain('1 selected');
+    expect(component.bulkSubmissionInvalid()).toBe(true);
+    component.bulkActionForm.controls.tags.setValue('bulk');
+    fixture.detectChanges();
+    const reviewTrigger = fixture.nativeElement.querySelector('.bulk-action-bar button.primary-button') as HTMLButtonElement;
+    reviewTrigger.focus();
+    component.openBulkConfirmation();
+    fixture.detectChanges();
+    vi.runAllTimers();
+    expect(fixture.nativeElement.querySelector('[role="dialog"]')).not.toBeNull();
+    component.cancelBulkConfirmation();
+    fixture.detectChanges();
+    vi.runAllTimers();
+    expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(reviewTrigger);
+    expect(component.liveMessage()).toContain('cancelled');
+  });
+
+  it('invokes bulk update once and keeps confirmation guarded while pending', () => {
+    const fixture = create();
+    const component = fixture.componentInstance;
+    component.toggleQuestionSelection(testQuestion, true);
+    component.bulkActionForm.controls.tags.setValue('bulk');
+    fixture.detectChanges();
+    component.openBulkConfirmation();
+    fixture.detectChanges();
+    vi.runAllTimers();
+
+    component.confirmBulkAction();
+    fixture.detectChanges();
+    expect(facade.bulkUpdateQuestions).toHaveBeenCalledTimes(1);
+    expect(component.workflowPending()).toBe(true);
+    const confirmButton = fixture.nativeElement.querySelector('.bulk-dialog .primary-button') as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    component.confirmBulkAction();
+    expect(facade.bulkUpdateQuestions).toHaveBeenCalledTimes(1);
+    expect(component.bulkConfirmationOpen()).toBe(true);
+  });
+
+  it('closes after a mixed result, retains failed selection, announces partial failure, and restores focus', () => {
+    const fixture = create();
+    const component = fixture.componentInstance;
+    component.toggleQuestionSelection(bulkReviewQuestion, true);
+    component.toggleQuestionSelection(bulkArchivedQuestion, true);
+    component.bulkActionForm.controls.tags.setValue('bulk');
+    fixture.detectChanges();
+    const reviewTrigger = fixture.nativeElement.querySelector('.bulk-action-bar button.primary-button') as HTMLButtonElement;
+    reviewTrigger.focus();
+    component.openBulkConfirmation();
+    fixture.detectChanges();
+    vi.runAllTimers();
+    component.confirmBulkAction();
+
+    const success = {
+      kind: 'success' as const,
+      id: bulkReviewQuestion.id,
+      expectedVersion: bulkReviewQuestion.version,
+      before: bulkReviewQuestion,
+      after: bulkReviewQuestion,
+      question: bulkReviewQuestion
+    };
+    const failure = {
+      kind: 'failure' as const,
+      id: bulkArchivedQuestion.id,
+      expectedVersion: bulkArchivedQuestion.version,
+      code: 'not-editable' as const,
+      message: 'Archived questions cannot be changed.'
+    };
+    const result: QuestionBulkResult = {
+      items: [success, failure],
+      successes: [success],
+      failures: [failure],
+      counts: { total: 2, succeeded: 1, failed: 1 }
+    };
+    facade.bulkUpdateResult$.next(result);
+    fixture.detectChanges();
+    vi.runAllTimers();
+    fixture.detectChanges();
+
+    expect(component.bulkConfirmationOpen()).toBe(false);
+    expect(component.workflowPending()).toBe(false);
+    expect([...component.bulkSelectedIds()]).toEqual([bulkArchivedQuestion.id]);
+    const feedback = fixture.nativeElement.querySelector('.bulk-feedback[role="status"]') as HTMLElement;
+    expect(feedback.textContent).toContain('1 question failed');
+    expect(feedback.getAttribute('aria-live')).toBe('polite');
+    expect(fixture.nativeElement.querySelector('.bulk-failure-list')?.textContent).toContain(failure.message);
+    expect(component.liveMessage()).toContain('failed rows remain selected');
+    expect(document.activeElement).toBe(reviewTrigger);
+  });
+
+  it('restores focus after a bulk request error closes the dialog', () => {
+    const fixture = create();
+    const component = fixture.componentInstance;
+    component.toggleQuestionSelection(testQuestion, true);
+    component.bulkActionForm.controls.tags.setValue('bulk');
+    fixture.detectChanges();
+    const reviewTrigger = fixture.nativeElement.querySelector('.bulk-action-bar button.primary-button') as HTMLButtonElement;
+    reviewTrigger.focus();
+    component.openBulkConfirmation();
+    fixture.detectChanges();
+    vi.runAllTimers();
+    component.confirmBulkAction();
+    facade.bulkUpdateResult$.error(new Error('bulk request failed'));
+    fixture.detectChanges();
+    vi.runAllTimers();
+    fixture.detectChanges();
+
+    expect(component.bulkConfirmationOpen()).toBe(false);
+    expect(component.bulkFeedback()).toContain('bulk request failed');
+    expect(document.activeElement).toBe(reviewTrigger);
+  });
+
 });

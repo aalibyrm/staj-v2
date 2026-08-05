@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal, type OnInit } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, ViewChild, computed, inject, signal, type OnInit } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, type ParamMap } from '@angular/router';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
@@ -16,7 +16,10 @@ import {
   QUESTION_TYPES
 } from '../data-access/question-bank.facade';
 import type {
+  EditableQuestionStatus,
   Question,
+  QuestionBulkFailure,
+  QuestionBulkRequest,
   QuestionId,
   QuestionListQuery,
   QuestionStatus,
@@ -29,6 +32,8 @@ interface QueryRequest {
   readonly query: QuestionListQuery;
   readonly selectedId: QuestionId | null;
 }
+
+type BulkActionMode = 'add-tags' | 'replace-tags' | 'status';
 
 const FILTER_DEFAULTS = {
   search: '',
@@ -81,6 +86,34 @@ const FILTER_DEFAULTS = {
       </div>
 
       <p class="live-message" aria-live="polite">{{ liveMessage() }}</p>
+      <section *ngIf="selectedQuestionCount() > 0" class="bulk-action-bar" [formGroup]="bulkActionForm" aria-labelledby="bulk-action-heading">
+        <div class="bulk-action-copy">
+          <span class="eyebrow" id="bulk-action-heading">Bulk actions</span>
+          <strong>{{ selectedQuestionCount() }} selected</strong>
+          <span>Published and archived rows may be selected, but immutable items can fail individually.</span>
+        </div>
+        <label for="bulk-action-mode"><span>Action</span><select id="bulk-action-mode" formControlName="mode">
+          <option value="add-tags">Add tags</option>
+          <option value="replace-tags">Replace tags</option>
+          <option value="status">Set status</option>
+        </select></label>
+        <label *ngIf="bulkActionMode() !== 'status'" for="bulk-tags"><span>{{ bulkActionMode() === 'add-tags' ? 'Tags to add' : 'Replacement tags' }}</span><input id="bulk-tags" formControlName="tags" type="text" placeholder="e.g. algebra, review" autocomplete="off" /></label>
+        <label *ngIf="bulkActionMode() === 'status'" for="bulk-status"><span>Status</span><select id="bulk-status" formControlName="status"><option value="draft">Draft</option><option value="review">Review</option></select></label>
+        <button type="button" class="primary-button" #bulkReviewButton [disabled]="bulkSubmissionInvalid()" (click)="openBulkConfirmation()">Review bulk change</button>
+      </section>
+      <p *ngIf="bulkFeedback()" class="bulk-feedback" role="status" aria-live="polite">{{ bulkFeedback() }}</p>
+      <ul *ngIf="bulkFailures().length > 0" class="bulk-failure-list" aria-label="Bulk action failures">
+        <li *ngFor="let failure of bulkFailures(); trackBy: trackByFailureId"><span class="failure-mark" aria-hidden="true">!</span><strong>{{ failure.id }}</strong><span>{{ failure.message }}</span></li>
+      </ul>
+      <div *ngIf="bulkConfirmationOpen()" class="bulk-dialog-layer" (keydown.escape)="cancelBulkConfirmation()">
+        <section #bulkDialog class="bulk-dialog" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-heading" tabindex="-1">
+          <h2 id="bulk-dialog-heading">Confirm bulk change</h2>
+          <p>{{ selectedQuestionCount() }} selected question{{ selectedQuestionCount() === 1 ? '' : 's' }} will be processed independently.</p>
+          <p class="dialog-warning"><span aria-hidden="true">!</span> Published and archived questions are immutable; those rows can fail while other selected rows succeed.</p>
+          <p *ngIf="bulkFeedback()" class="bulk-feedback" role="alert" aria-live="assertive">{{ bulkFeedback() }}</p>
+          <div class="dialog-actions"><button type="button" class="secondary-button" [disabled]="workflowPending()" (click)="cancelBulkConfirmation()">Cancel</button><button type="button" class="primary-button" [disabled]="bulkSubmissionInvalid()" (click)="confirmBulkAction()">{{ workflowPending() ? 'Applying…' : 'Confirm and apply' }}</button></div>
+        </section>
+      </div>
       <app-question-editor
         *ngIf="editorOpen()"
         [question]="editingQuestion()"
@@ -98,9 +131,10 @@ const FILTER_DEFAULTS = {
           <div *ngIf="facade.requestState().status === 'success'" class="table-wrap">
             <table>
               <caption class="sr-only">Scoped question bank results</caption>
-              <thead><tr><th scope="col">ID</th><th scope="col">Course / outcome</th><th scope="col">Type</th><th scope="col">Difficulty</th><th scope="col">Status</th><th scope="col">Version</th><th scope="col">Updated</th></tr></thead>
+              <thead><tr><th scope="col" class="selection-column"><input type="checkbox" [checked]="allCurrentPageSelected()" [indeterminate]="someCurrentPageSelected()" (change)="toggleCurrentPageSelection($any($event.target).checked)" aria-label="Select all questions on this page" /></th><th scope="col">ID</th><th scope="col">Course / outcome</th><th scope="col">Type</th><th scope="col">Difficulty</th><th scope="col">Status</th><th scope="col">Version</th><th scope="col">Updated</th></tr></thead>
               <tbody>
                 <tr *ngFor="let question of questions(); trackBy: trackByQuestionId" [class.question-row--selected]="facade.selectedId() === question.id" [attr.aria-selected]="facade.selectedId() === question.id" (click)="selectQuestion(question.id)">
+                  <td class="selection-column"><input type="checkbox" [checked]="isQuestionSelected(question.id)" (click)="$event.stopPropagation()" (change)="toggleQuestionSelection(question, $any($event.target).checked)" [attr.aria-label]="'Select question ' + question.id" /></td>
                   <td><button type="button" class="row-select" [attr.aria-label]="'Preview question ' + question.id" [attr.aria-pressed]="facade.selectedId() === question.id" (click)="$event.stopPropagation(); selectQuestion(question.id)">{{ question.id }}</button><span class="row-title">{{ question.title }}</span></td>
                   <td><strong>{{ question.course.code }}</strong><span>{{ question.outcome.code }} · {{ question.outcome.title }}</span></td>
                   <td>{{ typeLabel(question.type) }}</td>
@@ -217,8 +251,18 @@ const FILTER_DEFAULTS = {
     .tag-list { display:flex; flex-wrap:wrap; gap:6px; }
     .tag { border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-subtle); padding:4px 7px; color:var(--ui-text-muted); font-size:11px; }
     .inspector-empty { display:grid; justify-items:start; gap:8px; color:var(--ui-text-muted); }
-    .inspector-empty > span { font-size:24px; color:var(--ui-primary); }
-    .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+    .bulk-action-bar { display:flex; flex-wrap:wrap; align-items:end; gap:10px; padding:12px 14px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-subtle); }
+    .bulk-action-copy { display:grid; gap:3px; min-width:220px; flex:1 1 260px; color:var(--ui-text-muted); font-size:12px; }
+    .bulk-action-copy strong { color:var(--ui-text); }
+    .bulk-feedback { color:var(--ui-text-muted); font-size:12px; }
+    .bulk-failure-list { display:grid; gap:6px; margin:0; padding:0; list-style:none; color:var(--ui-text-muted); font-size:12px; }
+    .bulk-failure-list li { display:flex; align-items:flex-start; gap:7px; padding:7px 9px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); }
+    .failure-mark, .dialog-warning > span { color:var(--ui-text); font-weight:800; }
+    .bulk-dialog-layer { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(15,23,42,.35); }
+    .bulk-dialog { display:grid; gap:12px; width:min(480px,100%); padding:20px; border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-md); background:var(--ui-surface); box-shadow:var(--ui-shadow-lg, var(--ui-shadow-sm)); }
+    .dialog-warning { display:flex; gap:8px; color:var(--ui-text-muted); font-size:12px; line-height:1.5; }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
+    .selection-column { width:38px; text-align:center; }
     @media (max-width:1100px) { .filter-bar { grid-template-columns:repeat(3,minmax(130px,1fr)); } .search-field { grid-column:span 3; } .secondary-button { justify-self:start; } .content-grid { grid-template-columns:minmax(0,1fr) 320px; } }
     @media (max-width:700px) { .question-bank { padding:0; gap:14px; } .page-heading { align-items:start; flex-direction:column; } .filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } .search-field { grid-column:span 2; } .content-grid { grid-template-columns:1fr; } .inspector { position:relative; top:auto; order:-1; } .table-wrap { overflow-x:auto; } table { min-width:740px; } .pagination { justify-content:center; } }
   `]
@@ -228,6 +272,24 @@ export class QuestionBankComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
+  @ViewChild('bulkDialog') private bulkDialog?: ElementRef<HTMLElement>;
+  @ViewChild('bulkReviewButton') private bulkReviewButton?: ElementRef<HTMLButtonElement>;
+  private readonly bulkSelectedIdsSignal = signal<ReadonlySet<QuestionId>>(new Set<QuestionId>());
+  private readonly bulkExpectedVersionsSignal = signal<ReadonlyMap<QuestionId, number>>(new Map<QuestionId, number>());
+  readonly bulkSelectedIds = this.bulkSelectedIdsSignal.asReadonly();
+  readonly bulkConfirmationOpen = signal(false);
+  readonly bulkFeedback = signal('');
+  readonly bulkFailures = signal<readonly QuestionBulkFailure[]>([]);
+  readonly bulkActionMode = computed(() => this.bulkActionForm.controls.mode.value as BulkActionMode);
+  readonly selectedQuestionCount = computed(() => this.bulkSelectedIdsSignal().size);
+  readonly allCurrentPageSelected = computed(() => {
+    const questions = this.questions();
+    return questions.length > 0 && questions.every((question) => this.bulkSelectedIdsSignal().has(question.id));
+  });
+  readonly someCurrentPageSelected = computed(() => {
+    const selected = this.bulkSelectedIdsSignal();
+    return this.questions().some((question) => selected.has(question.id)) && !this.allCurrentPageSelected();
+  });
   private readonly queryRequests = new Subject<QueryRequest>();
   private readonly selectionRequests = new Subject<QuestionId | null>();
   private lastQueryKey = '';
@@ -269,6 +331,11 @@ export class QuestionBankComponent implements OnInit {
     status: new FormControl('', { nonNullable: true }),
     type: new FormControl('', { nonNullable: true }),
     sort: new FormControl('updatedAt-desc', { nonNullable: true })
+  });
+  readonly bulkActionForm = new FormGroup({
+    mode: new FormControl<BulkActionMode>('add-tags', { nonNullable: true }),
+    tags: new FormControl('', { nonNullable: true }),
+    status: new FormControl<EditableQuestionStatus>('review', { nonNullable: true })
   });
   readonly successorForm = new FormGroup({
     changeNote: new FormControl('', {
@@ -329,6 +396,121 @@ export class QuestionBankComponent implements OnInit {
   resetFilters(): void { this.filterForm.reset(FILTER_DEFAULTS); }
 
   setStatus(status: QuestionStatus | null): void { this.filterForm.patchValue({ status: status ?? '' }); }
+
+  isQuestionSelected(id: QuestionId): boolean {
+    return this.bulkSelectedIdsSignal().has(id);
+  }
+
+  toggleQuestionSelection(question: Question, selected: boolean): void {
+    const ids = new Set(this.bulkSelectedIdsSignal());
+    const versions = new Map(this.bulkExpectedVersionsSignal());
+    if (selected) {
+      ids.add(question.id);
+      versions.set(question.id, question.version);
+    } else {
+      ids.delete(question.id);
+      versions.delete(question.id);
+    }
+    this.bulkSelectedIdsSignal.set(ids);
+    this.bulkExpectedVersionsSignal.set(versions);
+  }
+
+  toggleCurrentPageSelection(selected: boolean): void {
+    const ids = new Set(this.bulkSelectedIdsSignal());
+    const versions = new Map(this.bulkExpectedVersionsSignal());
+    for (const question of this.questions()) {
+      if (selected) {
+        ids.add(question.id);
+        versions.set(question.id, question.version);
+      } else {
+        ids.delete(question.id);
+        versions.delete(question.id);
+      }
+    }
+    this.bulkSelectedIdsSignal.set(ids);
+    this.bulkExpectedVersionsSignal.set(versions);
+  }
+
+  bulkSubmissionInvalid(): boolean {
+    if (this.workflowPending() || this.selectedQuestionCount() === 0) {
+      return true;
+    }
+    return this.bulkActionMode() !== 'status' && this.bulkActionForm.controls.tags.value.trim().length === 0;
+  }
+
+  openBulkConfirmation(): void {
+    if (this.bulkSubmissionInvalid()) {
+      this.bulkFeedback.set('Choose a valid bulk action before continuing.');
+      this.liveMessage.set(this.bulkFeedback());
+      return;
+    }
+    this.bulkConfirmationOpen.set(true);
+    this.bulkFeedback.set('');
+    setTimeout(() => this.bulkDialog?.nativeElement.focus());
+  }
+
+  cancelBulkConfirmation(): void {
+    if (this.workflowPending()) {
+      return;
+    }
+    this.bulkConfirmationOpen.set(false);
+    this.liveMessage.set('Bulk change cancelled.');
+    this.restoreBulkTriggerFocus();
+  }
+
+  confirmBulkAction(): void {
+    if (this.bulkSubmissionInvalid()) {
+      return;
+    }
+    const targets = [...this.bulkSelectedIdsSignal()].map((id) => ({
+      id,
+      expectedVersion: this.bulkExpectedVersionsSignal().get(id) ?? 0
+    }));
+    const mode = this.bulkActionMode();
+    const tags = this.bulkActionForm.controls.tags.value.split(',');
+    const action = mode === 'status'
+      ? { status: this.bulkActionForm.controls.status.value }
+      : mode === 'add-tags'
+        ? { addTags: tags }
+        : { replaceTags: tags };
+    const request: QuestionBulkRequest = { targets, action };
+    this.workflowPending.set(true);
+    this.bulkFeedback.set('');
+    this.liveMessage.set('Applying bulk question changes.');
+    this.facade.bulkUpdateQuestions(request).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: (result) => {
+        const failedIds = new Set(result.failures.map((failure) => failure.id));
+        const retainedIds = new Set([...this.bulkSelectedIdsSignal()].filter((id) => failedIds.has(id)));
+        const retainedVersions = new Map<QuestionId, number>();
+        for (const id of retainedIds) {
+          const version = this.bulkExpectedVersionsSignal().get(id);
+          if (version !== undefined) retainedVersions.set(id, version);
+        }
+        this.bulkSelectedIdsSignal.set(retainedIds);
+        this.bulkExpectedVersionsSignal.set(retainedVersions);
+        this.bulkFailures.set(result.failures);
+        this.workflowPending.set(false);
+        this.bulkConfirmationOpen.set(false);
+        this.restoreBulkTriggerFocus();
+        if (result.failures.length === 0) {
+          this.bulkFeedback.set(`${result.counts.succeeded} question${result.counts.succeeded === 1 ? '' : 's'} updated successfully.`);
+          this.liveMessage.set(this.bulkFeedback());
+        } else {
+          this.bulkFeedback.set(`${result.failures.length} question${result.failures.length === 1 ? '' : 's'} failed; failed rows remain selected for retry.`);
+          this.liveMessage.set(this.bulkFeedback());
+        }
+      },
+      error: (error: unknown) => {
+        this.workflowPending.set(false);
+        this.bulkFeedback.set(error instanceof Error ? error.message : 'Bulk question request failed.');
+        this.liveMessage.set(this.bulkFeedback());
+        this.bulkConfirmationOpen.set(false);
+        this.restoreBulkTriggerFocus();
+      }
+    });
+  }
+
+  trackByFailureId(_index: number, failure: QuestionBulkFailure): QuestionId { return failure.id; }
 
   setPage(page: number): void {
     const query = normalizeQuestionListQuery({ ...this.activeQuerySignal(), page });
@@ -525,4 +707,8 @@ export class QuestionBankComponent implements OnInit {
   }
 
   private queryKey(query: QuestionListQuery): string { return JSON.stringify(query); }
+
+  private restoreBulkTriggerFocus(): void {
+    setTimeout(() => this.bulkReviewButton?.nativeElement.focus());
+  }
 }
