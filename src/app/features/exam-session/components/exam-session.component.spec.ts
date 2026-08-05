@@ -57,7 +57,7 @@ const createSessionFacade = (nowSource: () => number = () => 10): ExamSessionFac
   });
   return new ExamSessionFacade(repository, questionSource, nowSource);
 };
-const createControlledRepository = (): ExamSessionRepository => {
+const createControlledRepository = (activate = true): ExamSessionRepository => {
   const repository = new ExamSessionRepository({
     idSource: () => 'session-test',
     tokenSource: () => 'test-token',
@@ -70,7 +70,9 @@ const createControlledRepository = (): ExamSessionRepository => {
     durationMs: 60_000,
     referenceTime: '2026-01-01T00:00:00.000Z'
   }).subscribe((session) => {
-    repository.transition(session.routeToken, 'active', { expectedVersion: session.version }).subscribe();
+    if (activate) {
+      repository.transition(session.routeToken, 'active', { expectedVersion: session.version }).subscribe();
+    }
   });
   return repository;
 };
@@ -701,6 +703,168 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
     } finally {
       externalFacade.ngOnDestroy();
       offlineFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it('runs the session lifecycle through online save, durable offline replay, and confirmed submit', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository(false);
+    const storage = new InMemoryStorageAdapter<unknown>();
+    let operation = 0;
+    const queue = new OfflineAnswerQueue(storage as StorageAdapter<never>, () => `integration-${++operation}`);
+    const eventBus = new PlatformEventBus();
+    const platform = new PlatformState(eventBus);
+    const facade = new ExamSessionFacade(repository, questionSource, () => 10, queue, platform, eventBus);
+    const saveDraftSpy = vi.spyOn(repository, 'saveDraft');
+    let loadSubscription: { unsubscribe: () => void } | undefined;
+    let confirmationSubscription: { unsubscribe: () => void } | undefined;
+    let submissionSubscription: { unsubscribe: () => void } | undefined;
+    try {
+      loadSubscription = facade.load('test-token').subscribe({ error: (error) => { throw error; } });
+      expect(repository.getSnapshot().sessions[0]?.state).toBe('active');
+      expect(facade.session()?.state).toBe('active');
+
+      repository.setMockScenario({ latencyMs: 20 });
+      expect(facade.updateAnswer('question-a', 'online answer')).toBe(true);
+      expect(facade.draftFor('question-a')).toMatchObject({ value: 'online answer', version: 0 });
+      await vi.advanceTimersByTimeAsync(299);
+      expect(facade.autosaveState().status).toBe('idle');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(facade.autosaveState().status).toBe('saving');
+      expect(repository.getSnapshot().drafts).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(facade.autosaveState().status).toBe('saved');
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'online answer', version: 1 })
+      ]);
+
+      platform.setConnectivity('offline');
+      expect(facade.connectivity()).toBe('offline');
+      expect(facade.updateAnswer('question-a', 'offline answer a')).toBe(true);
+      expect(facade.updateAnswer('question-b', 'offline answer b')).toBe(true);
+      expect(facade.draftFor('question-a')).toMatchObject({ value: 'offline answer a', version: 1 });
+      expect(facade.draftFor('question-b')).toMatchObject({ value: 'offline answer b', version: 0 });
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'online answer', version: 1 })
+      ]);
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+      const queuedWhileOffline = await queue.read('session-test');
+      await Promise.resolve();
+      expect(queuedWhileOffline.map((record) => record.questionId)).toEqual(['question-a', 'question-b']);
+      expect(queuedWhileOffline.map((record) => record.expectedVersion)).toEqual([1, 0]);
+      expect(facade.queuedAnswerCount()).toBe(2);
+      expect(facade.liveStatus()).toBe('Offline — 2 answer(s) queued');
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'online answer', version: 1 })
+      ]);
+
+      repository.setMockScenario({ latencyMs: 40 });
+      saveDraftSpy.mockClear();
+      platform.setConnectivity('reconnecting');
+      expect(facade.connectivity()).toBe('reconnecting');
+      expect(facade.isReplaying()).toBe(true);
+      expect(facade.liveStatus()).toBe('Reconnecting — syncing 2 answer(s)');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(saveDraftSpy.mock.calls[0]?.[1]).toBe('question-a');
+      expect((await queue.read('session-test')).map((record) => record.questionId)).toEqual([
+        'question-a',
+        'question-b'
+      ]);
+
+      await vi.advanceTimersByTimeAsync(39);
+      expect((await queue.read('session-test')).map((record) => record.questionId)).toEqual([
+        'question-a',
+        'question-b'
+      ]);
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'online answer', version: 1 })
+      ]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect((await queue.read('session-test')).map((record) => record.questionId)).toEqual(['question-b']);
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'offline answer a', version: 2 })
+      ]);
+
+      platform.setConnectivity('online');
+      expect(platform.state().connectivity).toBe('online');
+      expect(facade.connectivity()).toBe('reconnecting');
+      expect(facade.liveStatus()).toBe('Reconnecting — syncing 1 answer(s)');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(saveDraftSpy.mock.calls.map((call) => call[1])).toEqual(['question-a', 'question-b']);
+
+      await vi.advanceTimersByTimeAsync(39);
+      expect((await queue.read('session-test')).map((record) => record.questionId)).toEqual(['question-b']);
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'offline answer a', version: 2 })
+      ]);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(await queue.read('session-test')).toEqual([]);
+      await Promise.resolve();
+      expect(facade.queuedAnswerCount()).toBe(0);
+      expect(platform.state().pendingOperations).toBe(0);
+      expect(facade.isReplaying()).toBe(false);
+      expect(facade.connectivity()).toBe('online');
+      expect(facade.liveStatus()).toContain('Time is running low');
+      expect(saveDraftSpy.mock.calls.map((call) => call[1])).toEqual(['question-a', 'question-b']);
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'offline answer a', version: 2 }),
+        expect.objectContaining({ questionId: 'question-b', value: 'offline answer b', version: 1 })
+      ]);
+
+      let confirmationError: unknown;
+      confirmationSubscription = facade.submit(false).subscribe({ error: (error) => { confirmationError = error; } });
+      expect(confirmationError).toMatchObject({ code: 'confirmation-required' });
+      expect(facade.session()?.state).toBe('active');
+      submissionSubscription = facade.submit(true).subscribe({ error: (error) => { throw error; } });
+      expect(facade.session()?.state).toBe('submitted');
+      expect(facade.isTerminal()).toBe(true);
+      const beforeLateAnswer = facade.drafts();
+      expect(facade.updateAnswer('question-c', 'late answer')).toBe(false);
+      expect(facade.drafts()).toBe(beforeLateAnswer);
+    } finally {
+      submissionSubscription?.unsubscribe();
+      confirmationSubscription?.unsubscribe();
+      loadSubscription?.unsubscribe();
+      saveDraftSpy.mockRestore();
+      facade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('expires from synchronized reference time after a monotonic jump and rejects late answers', () => {
+    vi.useFakeTimers();
+    let monotonicNow = 10;
+    const repository = createControlledRepository(false);
+    const facade = new ExamSessionFacade(repository, questionSource, () => monotonicNow);
+    let loadSubscription: { unsubscribe: () => void } | undefined;
+    try {
+      loadSubscription = facade.load('test-token').subscribe({ error: (error) => { throw error; } });
+      expect(facade.session()?.state).toBe('active');
+      expect(facade.updateAnswer('question-a', 'before expiry')).toBe(true);
+      const beforeLateAnswer = facade.drafts();
+
+      vi.setSystemTime(new Date('2099-01-01T00:00:00.000Z'));
+      expect(facade.refreshTimer()?.expired).toBe(false);
+      monotonicNow = 60_010;
+      expect(facade.refreshTimer()?.expired).toBe(true);
+      expect(facade.session()?.state).toBe('expired');
+      expect(repository.getSnapshot().sessions[0]?.state).toBe('expired');
+      expect(facade.updateAnswer('question-b', 'late answer')).toBe(false);
+      expect(facade.drafts()).toBe(beforeLateAnswer);
+      expect(facade.draftFor('question-a')).toMatchObject({ value: 'before expiry', version: 0 });
+    } finally {
+      loadSubscription?.unsubscribe();
+      facade.ngOnDestroy();
       vi.clearAllTimers();
       vi.useRealTimers();
     }
