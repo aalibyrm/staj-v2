@@ -117,6 +117,15 @@ export interface LearningPathEntry {
   readonly isLocked: boolean;
 }
 
+export type LearningOutcomeMasteryById = Readonly<Record<LearningOutcomeId, number>>;
+
+export interface LearningPathRecommendationInput {
+  readonly courseId: CourseId;
+  readonly masteryByOutcomeId: LearningOutcomeMasteryById;
+  readonly completedContentIds: readonly ContentItemId[];
+  readonly lockedContentIds: readonly ContentItemId[];
+}
+
 export interface LearningPath extends LearningDomainEntityMetadata {
   readonly id: LearningPathId;
   readonly courseId: CourseId;

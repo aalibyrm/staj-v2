@@ -21,10 +21,13 @@ import {
   type LearningOutcomeUpdateInput,
   type LearningPath,
   type LearningPathCreateInput,
+  type LearningPathEntry,
   type LearningPathFilter,
   type LearningPathId,
+  type LearningPathRecommendationInput,
   type LearningPathUpdateInput
 } from '../models/learning-domain.models';
+import { recommendLearningPath as buildLearningPathRecommendation } from '../models/learning-path-recommendation';
 import {
   LearningDomainError,
   LearningDomainRepository,
@@ -134,6 +137,10 @@ export class LearningDomainFacade {
   ) {
     this.repository = repository ?? new LearningDomainRepository();
     this.store = store ?? new LearningDomainStore();
+  }
+
+  recommendLearningPath(input: LearningPathRecommendationInput): readonly LearningPathEntry[] {
+    return buildLearningPathRecommendation(input, this.store.content(), this.store.outcomes());
   }
 
   setCourseFilter(filter: CourseFilter): void {

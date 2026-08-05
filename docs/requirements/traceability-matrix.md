@@ -16,7 +16,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | OUT-01 | Outcome graph management | P02 | VERIFIED | P02-W01-W04: immutable cycle-safe outcome workflows plus guarded lazy list/editor and interactive graph/list views support course/level/status filtering, selection, prerequisite editing, dependents, and related content. |
 | OUT-02 | Cycle and unpublished dependency validation | P02 | VERIFIED | P02-W01-W03: repository references plus editor-side same-course/non-self/published-prerequisite checks and deterministic repository-level cycle rejection with an actionable closed path verified. |
 | CONTENT-01 | Content metadata and access conditions | P02 | VERIFIED | P02-W01/W05: immutable content outcome/level/duration/format/lifecycle/access metadata plus repository-side public/enrollment/outcome/role/availability enforcement, management mode, server-filtered catalog, and fail-closed consume behavior verified. |
-| CONTENT-02 | Rule-based learning sequence | P02 | IN_PROGRESS | P02-W01: ordered learning-path entries and explainable reason contracts plus mock CRUD/filter state verified; rule-based ordering and completed/locked exclusion remain P02-W06. |
+| CONTENT-02 | Rule-based learning sequence | P02 | VERIFIED | P02-W01/W06: immutable path contracts/CRUD plus a pure deterministic weakest-first recommendation rule, structured weak/strong/new-content reasons, semantic tie-breaks, and facade access over current normalized state verified. |
 | QUESTION-01 | Question types, answers, tags, difficulty, outcome relation | P03 | TODO | - |
 | QUESTION-02 | Published question versioning | P03 | TODO | - |
 | BLUEPRINT-01 | Blueprint distributions and constraints | P04 | TODO | - |
@@ -60,7 +60,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | BR-06 | See 03-business-rules.md BR-06 | P02-P07 | TODO | - |
 | BR-07 | See 03-business-rules.md BR-07 | P02-P07 | TODO | - |
 | BR-08 | See 03-business-rules.md BR-08 | P02-P07 | TODO | - |
-| BR-09 | See 03-business-rules.md BR-09 | P02-P07 | TODO | - |
+| BR-09 | See 03-business-rules.md BR-09 | P02-P07 | VERIFIED | P02-W06: completed and locked content IDs are removed before recommendation ranking, cannot reappear through mastery priority, and remaining entries are renumbered contiguously. |
 | BR-10 | See 03-business-rules.md BR-10 | P02-P07 | TODO | - |
 | BR-11 | See 03-business-rules.md BR-11 | P02-P07 | TODO | - |
 | ADV-01 | See 03-business-rules.md ADV-01 | P02/P04/P05/P07 | TODO | - |
