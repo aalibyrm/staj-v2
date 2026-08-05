@@ -137,6 +137,53 @@ describe('QuestionEditorComponent', () => {
       assertAnswer(input as QuestionCreateInput);
     }
   });
+  it('renders persistent labels for each repeated answer input', () => {
+    const assertLabels = (
+      type: 'single-choice' | 'matching' | 'short-answer',
+      expectedLabels: readonly string[],
+      expectedIds: readonly string[],
+      addRow?: (component: QuestionEditorComponent) => void
+    ) => {
+      const { fixture, component } = create();
+      component.form.controls.type.setValue(type);
+      addRow?.(component);
+      fixture.detectChanges();
+      const labels = Array.from(
+        fixture.nativeElement.querySelectorAll('.dynamic-field > label') as NodeListOf<HTMLLabelElement>
+      );
+      const inputs = Array.from(
+        fixture.nativeElement.querySelectorAll('.dynamic-field > input') as NodeListOf<HTMLInputElement>
+      );
+      expect(labels.map((label) => label.textContent?.trim() ?? '')).toEqual(expectedLabels);
+      expect(labels.map((label) => label.htmlFor)).toEqual(expectedIds);
+      expect(inputs.map((input) => input.id)).toEqual(expectedIds);
+      expect(new Set(inputs.map((input) => input.id)).size).toBe(inputs.length);
+    };
+
+    assertLabels('single-choice', ['Option 1', 'Option 2', 'Option 3'], ['question-option-0', 'question-option-1', 'question-option-2'], (component) => component.addOption());
+    assertLabels('matching', ['Pair 1 prompt', 'Pair 1 answer', 'Pair 2 prompt', 'Pair 2 answer'], ['question-matching-prompt-0', 'question-matching-answer-0', 'question-matching-prompt-1', 'question-matching-answer-1']);
+    assertLabels('short-answer', ['Accepted answer 1', 'Accepted answer 2'], ['question-accepted-answer-0', 'question-accepted-answer-1'], (component) => component.addAcceptedAnswer());
+  });
+
+  it('associates invalid dynamic groups with their visible error message', () => {
+    for (const [type, errorId] of [
+      ['single-choice', 'question-editor-options-error'],
+      ['matching', 'question-editor-matchingPairs-error'],
+      ['short-answer', 'question-editor-acceptedAnswers-error']
+    ] as const) {
+      const { fixture, component } = create();
+      component.form.controls.type.setValue(type);
+      component.save();
+      fixture.detectChanges();
+      const inputs = Array.from(
+        fixture.nativeElement.querySelectorAll('.dynamic-row input') as NodeListOf<HTMLInputElement>
+      );
+      expect(inputs.length).toBeGreaterThan(0);
+      expect(inputs.every((input) => input.getAttribute('aria-describedby') === errorId)).toBe(true);
+      expect(inputs.every((input) => input.getAttribute('aria-invalid') === 'true')).toBe(true);
+      expect(fixture.nativeElement.querySelector(`#${errorId}`)).not.toBeNull();
+    }
+  });
 
   it('blocks duplicate saves while a request is pending and preserves service-error feedback', () => {
     const { component } = create();

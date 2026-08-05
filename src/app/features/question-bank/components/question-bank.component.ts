@@ -34,6 +34,7 @@ interface QueryRequest {
 }
 
 type BulkActionMode = 'add-tags' | 'replace-tags' | 'status';
+type InspectorTab = 'preview' | 'metadata' | 'versions';
 
 const FILTER_DEFAULTS = {
   search: '',
@@ -130,18 +131,17 @@ const FILTER_DEFAULTS = {
           <div *ngIf="facade.requestState().status === 'empty'" class="table-state"><app-request-state state="empty" title="No matching questions" message="No authorized question matches the current filters." /></div>
           <div *ngIf="facade.requestState().status === 'success'" class="table-wrap">
             <table>
-              <caption class="sr-only">Scoped question bank results</caption>
-              <thead><tr><th scope="col" class="selection-column"><input type="checkbox" [checked]="allCurrentPageSelected()" [indeterminate]="someCurrentPageSelected()" (change)="toggleCurrentPageSelection($any($event.target).checked)" aria-label="Select all questions on this page" /></th><th scope="col">ID</th><th scope="col">Course / outcome</th><th scope="col">Type</th><th scope="col">Difficulty</th><th scope="col">Status</th><th scope="col">Version</th><th scope="col">Updated</th></tr></thead>
+              <thead><tr><th scope="col" class="selection-column"><input type="checkbox" [checked]="allCurrentPageSelected()" [indeterminate]="someCurrentPageSelected()" (change)="toggleCurrentPageSelection($any($event.target).checked)" aria-label="Select all questions on this page" /></th><th scope="col" class="column-identity">ID</th><th scope="col" class="column-outcome">Course / outcome</th><th scope="col" class="column-type">Type</th><th scope="col" class="column-difficulty">Difficulty</th><th scope="col" class="column-status">Status</th><th scope="col" class="column-version">Version</th><th scope="col" class="column-updated">Updated</th></tr></thead>
               <tbody>
                 <tr *ngFor="let question of questions(); trackBy: trackByQuestionId" [class.question-row--selected]="facade.selectedId() === question.id" [attr.aria-selected]="facade.selectedId() === question.id" (click)="selectQuestion(question.id)">
                   <td class="selection-column"><input type="checkbox" [checked]="isQuestionSelected(question.id)" (click)="$event.stopPropagation()" (change)="toggleQuestionSelection(question, $any($event.target).checked)" [attr.aria-label]="'Select question ' + question.id" /></td>
-                  <td><button type="button" class="row-select" [attr.aria-label]="'Preview question ' + question.id" [attr.aria-pressed]="facade.selectedId() === question.id" (click)="$event.stopPropagation(); selectQuestion(question.id)">{{ question.id }}</button><span class="row-title">{{ question.title }}</span></td>
-                  <td><strong>{{ question.course.code }}</strong><span>{{ question.outcome.code }} · {{ question.outcome.title }}</span></td>
-                  <td>{{ typeLabel(question.type) }}</td>
-                  <td><span class="table-badge">{{ difficultyLabel(question.difficulty) }}</span></td>
-                  <td><span class="table-badge status-badge"><span aria-hidden="true">{{ statusIcon(question.status) }}</span> {{ statusLabel(question.status) }}</span></td>
-                  <td class="numeric">v{{ question.version }}</td>
-                  <td><time [attr.datetime]="question.updatedAt">{{ question.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time></td>
+                  <td class="column-identity"><button type="button" class="row-select" [attr.aria-label]="'Preview question ' + question.id" [attr.aria-pressed]="facade.selectedId() === question.id" (click)="$event.stopPropagation(); selectQuestion(question.id)">{{ question.id }}</button><span class="row-title">{{ question.title }}</span></td>
+                  <td class="column-outcome"><strong>{{ question.course.code }}</strong><span>{{ question.outcome.code }} · {{ question.outcome.title }}</span></td>
+                  <td class="column-type">{{ typeLabel(question.type) }}</td>
+                  <td class="column-difficulty"><span class="table-badge">{{ difficultyLabel(question.difficulty) }}</span></td>
+                  <td class="column-status"><span class="table-badge status-badge"><span aria-hidden="true">{{ statusIcon(question.status) }}</span> {{ statusLabel(question.status) }}</span></td>
+                  <td class="column-version numeric">v{{ question.version }}</td>
+                  <td class="column-updated"><time [attr.datetime]="question.updatedAt">{{ question.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time></td>
                 </tr>
               </tbody>
             </table>
@@ -153,40 +153,75 @@ const FILTER_DEFAULTS = {
           </nav>
         </section>
 
-        <aside class="inspector" aria-labelledby="question-inspector-heading" [attr.aria-hidden]="facade.selectedQuestion() === null ? 'true' : null">
-          <div class="inspector-heading"><div><span class="eyebrow">Current entity</span><h2 id="question-inspector-heading">Inspector</h2></div><button *ngIf="facade.selectedQuestion()" type="button" class="icon-button" aria-label="Close question preview" (click)="clearSelection()">×</button></div>
+        <aside class="inspector" [class.inspector--open]="facade.selectedQuestion() !== null" aria-labelledby="question-inspector-heading" [attr.aria-hidden]="facade.selectedQuestion() === null ? 'true' : null">
+          <div class="inspector-heading"><div><span class="eyebrow">Current entity</span><h2 id="question-inspector-heading">Inspector</h2></div><button *ngIf="facade.selectedQuestion()" type="button" class="icon-button" aria-label="Close question inspector" (click)="clearSelection()">×</button></div>
           <ng-container *ngIf="facade.selectedQuestion() as selected; else noSelection">
             <div class="inspector-id"><strong>{{ selected.id }}</strong><span class="table-badge status-badge"><span aria-hidden="true">{{ statusIcon(selected.status) }}</span> {{ statusLabel(selected.status) }}</span></div>
-            <section class="preview-block"><h3>Preview</h3><p class="question-stem">{{ selected.stem }}</p><ol *ngIf="selected.options.length > 0" class="answer-options"><li *ngFor="let option of selected.options; trackBy: trackByOptionId">{{ option.label }}</li></ol><p class="answer-note"><strong>Answer representation:</strong> {{ answerLabel(selected) }}</p><p class="explanation"><strong>Explanation:</strong> {{ selected.explanation }}</p></section>
+            <div class="inspector-tabs" role="tablist" aria-label="Question inspector sections">
+              <button type="button" role="tab" class="inspector-tab" data-inspector-tab="preview" id="question-preview-tab" aria-controls="question-preview-panel" [attr.aria-selected]="inspectorTab() === 'preview'" [attr.tabindex]="inspectorTab() === 'preview' ? '0' : '-1'" [class.inspector-tab--active]="inspectorTab() === 'preview'" (click)="setInspectorTab('preview')" (keydown)="onInspectorTabKeydown($event)">Preview</button>
+              <button type="button" role="tab" class="inspector-tab" data-inspector-tab="metadata" id="question-metadata-tab" aria-controls="question-metadata-panel" [attr.aria-selected]="inspectorTab() === 'metadata'" [attr.tabindex]="inspectorTab() === 'metadata' ? '0' : '-1'" [class.inspector-tab--active]="inspectorTab() === 'metadata'" (click)="setInspectorTab('metadata')" (keydown)="onInspectorTabKeydown($event)">Metadata</button>
+              <button type="button" role="tab" class="inspector-tab" data-inspector-tab="versions" id="question-versions-tab" aria-controls="question-versions-panel" [attr.aria-selected]="inspectorTab() === 'versions'" [attr.tabindex]="inspectorTab() === 'versions' ? '0' : '-1'" [class.inspector-tab--active]="inspectorTab() === 'versions'" (click)="setInspectorTab('versions')" (keydown)="onInspectorTabKeydown($event)">Versions</button>
+            </div>
+            <section id="question-preview-panel" class="inspector-panel preview-block" role="tabpanel" aria-labelledby="question-preview-tab" tabindex="0" [hidden]="inspectorTab() !== 'preview'">
+              <h3>Preview</h3>
+              <p class="question-stem">{{ selected.stem }}</p>
+              <ol *ngIf="selected.options.length > 0" class="answer-options"><li *ngFor="let option of selected.options; trackBy: trackByOptionId">{{ option.label }}</li></ol>
+              <p class="answer-note"><strong>Answer representation:</strong> {{ answerLabel(selected) }}</p>
+              <p class="explanation"><strong>Explanation:</strong> {{ selected.explanation }}</p>
+            </section>
             <div class="inspector-actions">
               <button *ngIf="isEditable(selected)" type="button" class="primary-button" [disabled]="workflowPending()" (click)="startEditQuestion(selected)">Edit question</button>
               <button *ngIf="isEditable(selected)" type="button" class="primary-button" [disabled]="workflowPending()" (click)="publishQuestion(selected)">{{ workflowPending() ? 'Publishing…' : 'Publish' }}</button>
               <p *ngIf="selected.status === 'archived'" class="non-editable-note">Preview only. Archived questions cannot be edited or versioned.</p>
               <p *ngIf="workflowFeedback()" class="workflow-feedback" [class.workflow-feedback--success]="workflowFeedbackKind() === 'success'" role="alert" aria-live="assertive">{{ workflowFeedback() }}</p>
             </div>
-              <ng-container *ngIf="selected.status === 'published'">
-                <section class="version-history" aria-labelledby="question-version-history-heading">
-                  <h3 id="question-version-history-heading">Immutable version history</h3>
-                  <ol *ngIf="versionHistory().length > 0; else noVersionHistory">
-                    <li *ngFor="let version of versionHistory(); trackBy: trackByVersionId">
-                      <strong>v{{ version.version }}</strong>
-                      <time [attr.datetime]="version.publishedAt">{{ version.publishedAt | date:'dd MMM yyyy, HH:mm' }}</time>
-                      <span>{{ version.changeNote }}</span>
-                    </li>
-                  </ol>
-                  <ng-template #noVersionHistory><p>No retained publication snapshots.</p></ng-template>
-                </section>
-                <form class="successor-form" [formGroup]="successorForm" (ngSubmit)="createSuccessor(selected)">
-                  <label for="question-change-note">Change note <span aria-hidden="true">*</span></label>
-                  <textarea id="question-change-note" formControlName="changeNote" rows="3" [attr.aria-invalid]="successorForm.controls.changeNote.invalid && successorAttempted() ? 'true' : null"></textarea>
-                  <p *ngIf="successorAttempted() && successorForm.controls.changeNote.invalid" class="field-error">Enter a nonblank change note.</p>
-                  <button type="submit" class="primary-button" [disabled]="workflowPending()">{{ workflowPending() ? 'Creating…' : 'Create editable successor' }}</button>
-                </form>
-              </ng-container>
-            <section class="metadata-block"><h3>Metadata</h3><dl><dt>Course</dt><dd>{{ selected.course.code }} · {{ selected.course.title }}</dd><dt>Outcome</dt><dd>{{ selected.outcome.code }} · {{ selected.outcome.title }}</dd><dt>Type</dt><dd>{{ typeLabel(selected.type) }}</dd><dt>Grade</dt><dd>{{ gradeLabel(selected.grade) }}</dd><dt>Difficulty</dt><dd>{{ difficultyLabel(selected.difficulty) }}</dd><dt>Points</dt><dd>{{ selected.points }}</dd><dt>Version</dt><dd>v{{ selected.version }} · immutable</dd><dt>Created</dt><dd><time [attr.datetime]="selected.createdAt">{{ selected.createdAt | date:'dd MMM yyyy' }}</time></dd><dt>Updated</dt><dd><time [attr.datetime]="selected.updatedAt">{{ selected.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time></dd></dl><div class="tag-list" aria-label="Question tags"><span *ngFor="let tag of selected.tags" class="tag">#{{ tag }}</span></div></section>
+            <section id="question-metadata-panel" class="inspector-panel metadata-block" role="tabpanel" aria-labelledby="question-metadata-tab" tabindex="0" [hidden]="inspectorTab() !== 'metadata'">
+              <h3>Metadata</h3>
+              <dl>
+                <dt>Course</dt><dd>{{ selected.course.code }} · {{ selected.course.title }}</dd>
+                <dt>Outcome</dt><dd>{{ selected.outcome.code }} · {{ selected.outcome.title }}</dd>
+                <dt>Type</dt><dd>{{ typeLabel(selected.type) }}</dd>
+                <dt>Difficulty</dt><dd>{{ difficultyLabel(selected.difficulty) }}</dd>
+                <dt>Grade</dt><dd>{{ gradeLabel(selected.grade) }}</dd>
+                <dt>Points</dt><dd>{{ selected.points }}</dd>
+                <dt>Tags</dt><dd><div class="tag-list" aria-label="Question tags"><span *ngFor="let tag of selected.tags; trackBy: trackByTag" class="tag">#{{ tag }}</span></div></dd>
+                <dt>Status</dt><dd>{{ statusLabel(selected.status) }}</dd>
+                <dt>Version</dt><dd>v{{ selected.version }} · {{ versionStateLabel(selected) }}</dd>
+                <dt>Created</dt><dd><time [attr.datetime]="selected.createdAt">{{ selected.createdAt | date:'dd MMM yyyy' }}</time></dd>
+                <dt>Updated</dt><dd><time [attr.datetime]="selected.updatedAt">{{ selected.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time></dd>
+              </dl>
+            </section>
+            <section id="question-versions-panel" class="inspector-panel versions-panel" role="tabpanel" aria-labelledby="question-versions-tab" tabindex="0" [hidden]="inspectorTab() !== 'versions'">
+              <h3>Versions</h3>
+              <article *ngIf="showCurrentVersionEntry(selected)" class="version-entry version-entry--current" aria-label="Current question entity">
+                <strong>Current {{ statusLabel(selected.status) }} entity · v{{ selected.version }}</strong>
+                <span *ngIf="isEditable(selected)">Editable current successor</span>
+                <span *ngIf="selected.status === 'archived'">Archived current entity · immutable</span>
+                <time [attr.datetime]="selected.updatedAt">Updated {{ selected.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time>
+              </article>
+              <section class="version-history" aria-labelledby="question-version-history-heading">
+                <h4 id="question-version-history-heading">Retained published snapshots</h4>
+                <ol *ngIf="versionHistory().length > 0; else noVersionHistory">
+                  <li *ngFor="let version of versionHistory(); trackBy: trackByVersionId">
+                    <strong>Published snapshot v{{ version.version }}</strong>
+                    <time [attr.datetime]="version.publishedAt">{{ version.publishedAt | date:'dd MMM yyyy, HH:mm' }}</time>
+                    <span>Immutable published snapshot</span>
+                    <span>{{ version.changeNote }}</span>
+                  </li>
+                </ol>
+                <ng-template #noVersionHistory><p>No retained publication snapshots.</p></ng-template>
+              </section>
+              <form *ngIf="selected.status === 'published'" class="successor-form" [formGroup]="successorForm" (ngSubmit)="createSuccessor(selected)">
+                <label for="question-change-note">Change note <span aria-hidden="true">*</span></label>
+                <textarea id="question-change-note" formControlName="changeNote" rows="3" [attr.aria-invalid]="successorForm.controls.changeNote.invalid && successorAttempted() ? 'true' : null"></textarea>
+                <p *ngIf="successorAttempted() && successorForm.controls.changeNote.invalid" class="field-error">Enter a nonblank change note.</p>
+                <button type="submit" class="primary-button" [disabled]="workflowPending()">{{ workflowPending() ? 'Creating…' : 'Create editable successor' }}</button>
+              </form>
+            </section>
           </ng-container>
-          <ng-template #noSelection><div class="inspector-empty"><span aria-hidden="true">⌁</span><h3>Select a question</h3><p>Choose one row to preview its current immutable content and metadata.</p></div></ng-template>
+          <ng-template #noSelection><div class="inspector-empty"><span aria-hidden="true">⌁</span><h3>Select a question</h3><p>Choose one row to preview its current content and metadata.</p></div></ng-template>
         </aside>
+        <button *ngIf="facade.selectedQuestion()" type="button" class="inspector-backdrop" aria-label="Close question inspector" (click)="clearSelection()"></button>
       </div>
     </section>
   `,
@@ -196,37 +231,38 @@ const FILTER_DEFAULTS = {
     .page-heading, .card-heading, .inspector-heading, .inspector-id { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
     .page-heading { align-items:end; }
     .page-heading h1, .card-heading h2, .inspector-heading h2, h3, p { margin:0; }
-    .eyebrow { color:var(--ui-text-muted); font-size:11px; font-weight:750; letter-spacing:.05em; text-transform:uppercase; }
-    h1 { font-size:clamp(1.5rem,3vw,2rem); line-height:1.2; }
-    h2 { font-size:1.1rem; line-height:1.3; }
-    h3 { font-size:.9rem; }
-    .page-heading p { color:var(--ui-text-muted); margin-top:4px; }
-    .read-only-note { border:1px solid var(--ui-border-strong); border-radius:999px; color:var(--ui-text-muted); padding:5px 10px; font-size:12px; font-weight:700; }
-    .filter-bar { display:grid; grid-template-columns:minmax(220px,1.6fr) repeat(6,minmax(112px,1fr)) auto; gap:10px; align-items:end; padding:14px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface); box-shadow:var(--ui-shadow-sm); }
+    .eyebrow, .page-heading p, .inspector-empty, dt, td > span, .tag { color:var(--ui-text-muted); }
+    .eyebrow { font-size:11px; font-weight:750; letter-spacing:.05em; text-transform:uppercase; }
+    .page-heading p { margin-top:4px; }
+    .read-only-note, .status-chip, .page-summary, .live-message, .answer-note, .explanation, .bulk-action-copy, .bulk-feedback, .bulk-failure-list, .dialog-warning, .version-entry span, .version-history li span { color:var(--ui-text-muted); font-size:12px; }
+    .read-only-note { border:1px solid var(--ui-border-strong); border-radius:999px; padding:5px 10px; font-weight:700; }
+    .filter-bar, .table-card, .inspector, .bulk-action-bar { border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); }
+    .filter-bar { display:grid; grid-template-columns:minmax(220px,1.6fr) repeat(6,minmax(112px,1fr)) auto; gap:10px; align-items:end; padding:14px; background:var(--ui-surface); }
     label { display:grid; gap:4px; min-width:0; color:var(--ui-text-muted); font-size:11px; font-weight:700; }
-    input, select { width:100%; min-height:40px; border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-sm); background:var(--ui-surface); color:var(--ui-text); padding:7px 10px; font-size:13px; }
-    .secondary-button, .page-button, .icon-button { min-height:40px; border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-sm); background:var(--ui-surface); color:var(--ui-text); cursor:pointer; font-weight:700; padding:7px 12px; }
+    input, select, .secondary-button, .page-button, .icon-button { border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-sm); background:var(--ui-surface); color:var(--ui-text); }
+    input, select { width:100%; min-height:40px; padding:7px 10px; font-size:13px; }
+    .secondary-button, .page-button, .icon-button { min-height:40px; cursor:pointer; font-weight:700; padding:7px 12px; }
     .secondary-button:hover, .page-button:hover, .icon-button:hover { border-color:var(--ui-primary); color:var(--ui-primary); }
     button:disabled { cursor:not-allowed; opacity:.45; }
     .status-bar { display:flex; flex-wrap:wrap; gap:8px; }
-    .status-chip { min-height:30px; border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface); color:var(--ui-text-muted); padding:4px 11px; cursor:pointer; font-size:12px; }
+    .status-chip { min-height:30px; border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface); padding:4px 11px; cursor:pointer; }
     .status-chip strong { margin-left:4px; color:var(--ui-text); font-variant-numeric:tabular-nums; }
     .status-chip--active { border-color:var(--ui-primary); background:var(--ui-primary-soft); color:var(--ui-primary); }
     .status-chip--active strong { color:var(--ui-primary); }
-    .live-message { min-height:18px; color:var(--ui-text-muted); font-size:12px; }
+    .live-message { min-height:18px; }
     .content-grid { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:16px; align-items:start; }
-    .table-card, .inspector { min-width:0; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface); box-shadow:var(--ui-shadow-sm); }
-    .card-heading, .inspector-heading { padding:16px 18px; border-bottom:1px solid var(--ui-border); }
-    .page-summary { color:var(--ui-text-muted); font-size:12px; }
+    .table-card, .inspector { min-width:0; background:var(--ui-surface); }
+    .card-heading, .inspector-heading { padding:16px 18px; }
+    .card-heading, .inspector-heading, .inspector-id, .preview-block, .inspector-actions, th, td { border-bottom:1px solid var(--ui-border); }
     .table-wrap { overflow:auto; }
     table { width:100%; border-collapse:collapse; font-size:12px; }
-    th { background:var(--ui-surface-subtle); color:var(--ui-text-muted); font-size:11px; letter-spacing:.02em; text-align:left; text-transform:uppercase; }
-    th, td { padding:11px 12px; border-bottom:1px solid var(--ui-border); vertical-align:middle; }
+    th { background:var(--ui-surface-subtle); color:var(--ui-text-muted); font-size:11px; text-align:left; text-transform:uppercase; }
+    th, td { padding:11px 12px; vertical-align:middle; }
     tbody tr { cursor:pointer; }
     tbody tr:hover, .question-row--selected { background:var(--ui-primary-soft); }
     tbody tr:last-child td { border-bottom:0; }
     td > span, td > strong { display:block; }
-    td > span { color:var(--ui-text-muted); margin-top:3px; }
+    td > span { margin-top:3px; }
     .row-select { border:0; background:transparent; color:var(--ui-primary); cursor:pointer; padding:0; font-size:12px; font-weight:750; text-align:left; }
     .row-title { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .table-badge { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--ui-border-strong); border-radius:999px; padding:3px 7px; color:var(--ui-text); font-size:11px; white-space:nowrap; }
@@ -237,34 +273,58 @@ const FILTER_DEFAULTS = {
     .page-button { min-width:38px; padding:5px 8px; }
     .page-button--active { border-color:var(--ui-primary); background:var(--ui-primary-soft); color:var(--ui-primary); }
     .icon-button { min-width:40px; font-size:20px; line-height:1; }
-    .inspector { position:sticky; top:16px; min-height:360px; }
-    .inspector-id, .preview-block, .metadata-block, .inspector-empty { padding:16px 18px; }
-    .inspector-id { align-items:center; border-bottom:1px solid var(--ui-border); }
-    .preview-block { display:grid; gap:10px; border-bottom:1px solid var(--ui-border); }
+    .inspector { position:sticky; top:16px; min-height:360px; overflow:hidden; }
+    .inspector-id, .preview-block, .metadata-block, .versions-panel, .inspector-empty { padding:16px 18px; }
+    .inspector-id { align-items:center; }
+    .inspector-tabs { display:grid; grid-template-columns:repeat(3,1fr); border-bottom:1px solid var(--ui-border); }
+    .inspector-tab { min-height:42px; border:0; border-bottom:2px solid transparent; background:var(--ui-surface); color:var(--ui-text-muted); cursor:pointer; font-size:12px; font-weight:750; padding:8px 10px; }
+    .inspector-tab:hover, .inspector-tab:focus-visible { color:var(--ui-primary); }
+    .inspector-tab--active { border-bottom-color:var(--ui-primary); color:var(--ui-primary); }
+    .inspector-panel[hidden] { display:none; }
+    .preview-block { display:grid; gap:10px; }
     .question-stem { line-height:1.55; }
     .answer-options { display:grid; gap:6px; margin:0; padding-left:24px; color:var(--ui-text-muted); }
-    .answer-note, .explanation { color:var(--ui-text-muted); font-size:12px; }
-    .metadata-block { display:grid; gap:12px; }
+    .inspector-actions { display:flex; flex-wrap:wrap; gap:8px; padding:16px 18px; }
+    .inspector-actions p { flex-basis:100%; }
+    .metadata-block, .versions-panel { display:grid; gap:12px; }
     dl { display:grid; grid-template-columns:92px minmax(0,1fr); gap:7px 10px; margin:0; font-size:12px; }
-    dt { color:var(--ui-text-muted); font-weight:700; }
+    dt { font-weight:700; }
     dd { margin:0; overflow-wrap:anywhere; }
     .tag-list { display:flex; flex-wrap:wrap; gap:6px; }
-    .tag { border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-subtle); padding:4px 7px; color:var(--ui-text-muted); font-size:11px; }
-    .inspector-empty { display:grid; justify-items:start; gap:8px; color:var(--ui-text-muted); }
-    .bulk-action-bar { display:flex; flex-wrap:wrap; align-items:end; gap:10px; padding:12px 14px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-subtle); }
-    .bulk-action-copy { display:grid; gap:3px; min-width:220px; flex:1 1 260px; color:var(--ui-text-muted); font-size:12px; }
-    .bulk-action-copy strong { color:var(--ui-text); }
-    .bulk-feedback { color:var(--ui-text-muted); font-size:12px; }
-    .bulk-failure-list { display:grid; gap:6px; margin:0; padding:0; list-style:none; color:var(--ui-text-muted); font-size:12px; }
-    .bulk-failure-list li { display:flex; align-items:flex-start; gap:7px; padding:7px 9px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); }
+    .tag { border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-subtle); padding:4px 7px; font-size:11px; }
+    .version-entry, .version-history { display:grid; gap:7px; }
+    .version-entry, .version-history li, .bulk-failure-list li { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); }
+    .version-entry { padding:10px 12px; background:var(--ui-surface-subtle); font-size:12px; }
+    .version-history ol { display:grid; gap:8px; margin:0; padding-left:22px; }
+    .version-history li { display:grid; gap:3px; padding:8px 10px; }
+    .inspector-empty { display:grid; justify-items:start; gap:8px; }
+    .inspector-backdrop { display:none; }
+    .bulk-action-bar { display:flex; flex-wrap:wrap; align-items:end; gap:10px; padding:12px 14px; background:var(--ui-surface-subtle); }
+    .bulk-action-copy { display:grid; gap:3px; min-width:220px; flex:1 1 260px; }
+    .bulk-failure-list { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
+    .bulk-failure-list li { display:flex; align-items:flex-start; gap:7px; padding:7px 9px; }
     .failure-mark, .dialog-warning > span { color:var(--ui-text); font-weight:800; }
     .bulk-dialog-layer { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(15,23,42,.35); }
-    .bulk-dialog { display:grid; gap:12px; width:min(480px,100%); padding:20px; border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-md); background:var(--ui-surface); box-shadow:var(--ui-shadow-lg, var(--ui-shadow-sm)); }
-    .dialog-warning { display:flex; gap:8px; color:var(--ui-text-muted); font-size:12px; line-height:1.5; }
+    .bulk-dialog { display:grid; gap:12px; width:min(480px,100%); padding:20px; border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-md); background:var(--ui-surface); }
+    .dialog-warning { display:flex; gap:8px; line-height:1.5; }
     .dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
     .selection-column { width:38px; text-align:center; }
-    @media (max-width:1100px) { .filter-bar { grid-template-columns:repeat(3,minmax(130px,1fr)); } .search-field { grid-column:span 3; } .secondary-button { justify-self:start; } .content-grid { grid-template-columns:minmax(0,1fr) 320px; } }
-    @media (max-width:700px) { .question-bank { padding:0; gap:14px; } .page-heading { align-items:start; flex-direction:column; } .filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } .search-field { grid-column:span 2; } .content-grid { grid-template-columns:1fr; } .inspector { position:relative; top:auto; order:-1; } .table-wrap { overflow-x:auto; } table { min-width:740px; } .pagination { justify-content:center; } }
+    @media (max-width:1100px) { .filter-bar { grid-template-columns:repeat(3,minmax(130px,1fr)); } .search-field { grid-column:span 3; } .secondary-button { justify-self:start; } }
+    @media (max-width:900px) {
+      .question-bank { max-width:100%; overflow-x:clip; }
+      .content-grid { grid-template-columns:minmax(0,1fr); min-width:0; }
+      .table-card { width:100%; overflow:hidden; }
+      .table-wrap { max-width:100%; max-height:calc(100dvh - 220px); overflow:auto; }
+      table { table-layout:fixed; }
+      .column-type, .column-difficulty, .column-version, .column-updated { display:none; }
+      .column-identity { width:38%; }
+      .column-outcome { width:42%; }
+      .column-status { width:100px; }
+      .inspector { display:none; position:fixed; z-index:31; inset:16px 12px 16px auto; width:min(400px,calc(100vw - 24px)); max-height:calc(100dvh - 32px); overflow:auto; border-radius:var(--ui-radius-md); }
+      .inspector.inspector--open { display:flex; flex-direction:column; }
+      .inspector-backdrop { display:block; position:fixed; inset:0; z-index:30; border:0; background:rgba(15,23,42,.35); cursor:pointer; }
+    }
+    @media (max-width:700px) { .question-bank { padding:0; gap:14px; } .page-heading { align-items:start; flex-direction:column; } .filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } .search-field { grid-column:span 2; } .pagination { justify-content:center; } }
   `]
 })
 export class QuestionBankComponent implements OnInit {
@@ -296,6 +356,7 @@ export class QuestionBankComponent implements OnInit {
   private lastSelectedKey = '';
   private readonly activeQuerySignal = signal(normalizeQuestionListQuery(FILTER_DEFAULTS));
   private readonly selectedRouteIdSignal = signal<QuestionId | null>(null);
+  readonly inspectorTab = signal<InspectorTab>('preview');
   readonly editorOpen = signal(false);
   readonly editingQuestionId = signal<QuestionId | null>(null);
   readonly editingQuestion = computed(() => {
@@ -365,6 +426,7 @@ export class QuestionBankComponent implements OnInit {
         this.liveMessage.set(this.facade.selectionNotice() || 'Selection cleared because the question is missing or stale.');
         this.syncUrl(this.activeQuerySignal(), null);
       } else if (selected !== null) {
+        this.inspectorTab.set('preview');
         this.loadVersionHistory(selected.id);
       }
     });
@@ -377,6 +439,7 @@ export class QuestionBankComponent implements OnInit {
         this.liveMessage.set(this.facade.selectionNotice() || 'Selection cleared because the question is missing or stale.');
         this.syncUrl(this.activeQuerySignal(), null);
       } else if (selected !== null) {
+        this.inspectorTab.set('preview');
         this.liveMessage.set(`Previewing ${selected.id}.`);
         this.loadVersionHistory(selected.id);
       }
@@ -520,6 +583,7 @@ export class QuestionBankComponent implements OnInit {
   }
 
   selectQuestion(id: QuestionId): void {
+    this.inspectorTab.set('preview');
     this.selectedRouteIdSignal.set(id);
     this.syncUrl(this.activeQuerySignal(), id);
     this.selectionRequests.next(id);
@@ -605,6 +669,7 @@ export class QuestionBankComponent implements OnInit {
   clearSelection(): void {
     this.facade.clearSelection();
     this.selectedRouteIdSignal.set(null);
+    this.inspectorTab.set('preview');
     this.liveMessage.set(this.facade.selectionNotice() || 'Selection cleared.');
     this.syncUrl(this.activeQuerySignal(), null);
   }
@@ -619,6 +684,46 @@ export class QuestionBankComponent implements OnInit {
   isEditable(question: Question): boolean {
     return question.status === 'draft' || question.status === 'review';
   }
+  showCurrentVersionEntry(question: Question): boolean {
+    return this.isEditable(question) || question.status === 'archived';
+  }
+
+  versionStateLabel(question: Question): string {
+    return this.isEditable(question)
+      ? 'editable successor'
+      : question.status === 'published'
+        ? 'immutable published entity'
+        : 'immutable archived entity';
+  }
+
+  setInspectorTab(tab: InspectorTab): void {
+    this.inspectorTab.set(tab);
+  }
+
+  onInspectorTabKeydown(event: KeyboardEvent): void {
+    const tabs: readonly InspectorTab[] = ['preview', 'metadata', 'versions'];
+    const currentIndex = tabs.indexOf(this.inspectorTab());
+    const key = event.key;
+    const nextIndex = key === 'ArrowRight'
+      ? (currentIndex + 1) % tabs.length
+      : key === 'ArrowLeft'
+        ? (currentIndex + tabs.length - 1) % tabs.length
+        : key === 'Home'
+          ? 0
+          : key === 'End'
+            ? tabs.length - 1
+            : -1;
+    if (nextIndex < 0) {
+      return;
+    }
+    event.preventDefault();
+    const next = tabs[nextIndex];
+    this.setInspectorTab(next);
+    (event.currentTarget as HTMLElement | null)?.parentElement
+      ?.querySelector<HTMLButtonElement>(`[data-inspector-tab="${next}"]`)
+      ?.focus();
+  }
+
   trackByVersionId(_index: number, version: QuestionVersion): string { return version.versionId; }
 
   private loadVersionHistory(id: QuestionId): void {
@@ -645,6 +750,7 @@ export class QuestionBankComponent implements OnInit {
 
   trackByQuestionId(_index: number, question: Question): QuestionId { return question.id; }
   trackByOptionId(_index: number, option: { readonly id: string }): string { return option.id; }
+  trackByTag(_index: number, tag: string): string { return tag; }
   trackById(_index: number, value: { readonly id: string }): string { return value.id; }
 
   statusLabel(value: string): string { return value.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()); }

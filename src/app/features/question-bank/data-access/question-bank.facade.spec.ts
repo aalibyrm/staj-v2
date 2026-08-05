@@ -7,7 +7,8 @@ import { DEMO_ACCOUNTS } from '../../../core/auth/authorization';
 import { SessionStore } from '../../../core/auth/session.store';
 import {
   QuestionBankFacade,
-  QuestionBankRepository
+  QuestionBankRepository,
+  normalizeQuestionListQuery
 } from './question-bank.facade';
 import { asQuestionId, asQuestionVersionId } from '../models/question.models';
 
@@ -18,6 +19,28 @@ const signedIn = (role: 'INSTRUCTOR' | 'MEASUREMENT_SPECIALIST' | 'STUDENT'): Se
   store.signIn(account.id);
   return store;
 };
+
+describe('normalizeQuestionListQuery enum filters', () => {
+  it('preserves supported values and removes unsupported enum tokens', () => {
+    expect(normalizeQuestionListQuery({
+      course: 'COURSE-SCOPE-01',
+      grade: 'foundation',
+      difficulty: 'medium',
+      status: 'published',
+      type: 'essay'
+    })).toMatchObject({
+      course: 'COURSE-SCOPE-01',
+      grade: 'foundation',
+      difficulty: 'medium',
+      status: 'published',
+      type: 'essay'
+    });
+    expect(normalizeQuestionListQuery({ grade: 'invalid-grade' }).grade).toBe('');
+    expect(normalizeQuestionListQuery({ difficulty: 'invalid-difficulty' }).difficulty).toBe('');
+    expect(normalizeQuestionListQuery({ status: 'invalid-status' }).status).toBe('');
+    expect(normalizeQuestionListQuery({ type: 'invalid-type' }).type).toBe('');
+  });
+});
 
 describe('QuestionBankRepository publish/version workflow', () => {
   it('publishes a frozen snapshot matching the published entity', async () => {

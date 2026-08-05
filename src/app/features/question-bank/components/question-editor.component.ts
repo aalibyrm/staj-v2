@@ -172,10 +172,33 @@ const acceptedAnswerValidator: ValidatorFn = (control: AbstractControl): Validat
           <div class="field field--wide"><label for="question-editor-tags">Tags</label><input id="question-editor-tags" formControlName="tags" placeholder="alignment, evidence, analysis" [attr.aria-describedby]="descriptionId('tags')" /><p class="field-help" [id]="helpId('tags')">Comma-separated tokens are trimmed and deduplicated.</p></div>
         </div>
         <section class="answer-editor" aria-labelledby="answer-editor-heading"><h3 id="answer-editor-heading">Answer controls</h3>
-          <div *ngIf="isChoice()" formArrayName="options" class="dynamic-list"><div *ngFor="let option of options.controls; let index = index; trackBy: trackByIndex" [formGroupName]="index" class="dynamic-row"><input [id]="'question-option-' + index" formControlName="label" [attr.aria-label]="'Option ' + (index + 1)" /><label class="correct-control"><input type="checkbox" formControlName="correct" (change)="singleCorrect(index)" /> <span>{{ form.controls.type.value === 'single-choice' ? 'Correct option' : 'Correct' }}</span></label><button type="button" class="icon-button" [disabled]="options.length <= 1" (click)="removeOption(index)" [attr.aria-label]="'Remove option ' + (index + 1)">×</button></div><button type="button" class="secondary-button" (click)="addOption()">Add option</button><p *ngIf="shouldShowError('options')" class="field-error" [id]="errorId('options')">{{ fieldError('options') }}</p></div>
+          <div *ngIf="isChoice()" formArrayName="options" class="dynamic-list">
+            <div *ngFor="let option of options.controls; let index = index; trackBy: trackByIndex" [formGroupName]="index" class="dynamic-row">
+              <div class="dynamic-field"><label [attr.for]="'question-option-' + index">Option {{ index + 1 }}</label><input [id]="'question-option-' + index" formControlName="label" [attr.aria-invalid]="ariaInvalid('options')" [attr.aria-describedby]="descriptionId('options')" /></div>
+              <label class="correct-control"><input type="checkbox" formControlName="correct" (change)="singleCorrect(index)" [attr.aria-invalid]="ariaInvalid('options')" [attr.aria-describedby]="descriptionId('options')" /> <span>{{ form.controls.type.value === 'single-choice' ? 'Correct option' : 'Correct' }}</span></label>
+              <button type="button" class="icon-button" [disabled]="options.length <= 1" (click)="removeOption(index)" [attr.aria-label]="'Remove option ' + (index + 1)">×</button>
+            </div>
+            <button type="button" class="secondary-button" (click)="addOption()">Add option</button>
+            <p *ngIf="shouldShowError('options')" class="field-error" [id]="errorId('options')">{{ fieldError('options') }}</p>
+          </div>
           <fieldset *ngIf="isBoolean()" class="boolean-answer"><legend>Boolean answer</legend><label><input type="radio" formControlName="booleanAnswer" value="true" /> True</label><label><input type="radio" formControlName="booleanAnswer" value="false" /> False</label></fieldset>
-          <div *ngIf="isMatching()" formArrayName="matchingPairs" class="dynamic-list"><div *ngFor="let pair of matchingPairs.controls; let index = index; trackBy: trackByIndex" [formGroupName]="index" class="dynamic-row"><input formControlName="prompt" [attr.aria-label]="'Matching prompt ' + (index + 1)" placeholder="Prompt" /><input formControlName="answer" [attr.aria-label]="'Matching answer ' + (index + 1)" placeholder="Answer" /><button type="button" class="icon-button" [disabled]="matchingPairs.length <= 2" (click)="removeMatchingPair(index)" [attr.aria-label]="'Remove matching pair ' + (index + 1)">×</button></div><button type="button" class="secondary-button" (click)="addMatchingPair()">Add pair</button><p *ngIf="shouldShowError('matchingPairs')" class="field-error" [id]="errorId('matchingPairs')">{{ fieldError('matchingPairs') }}</p></div>
-          <div *ngIf="isShortAnswer()" formArrayName="acceptedAnswers" class="dynamic-list"><div *ngFor="let answer of acceptedAnswers.controls; let index = index; trackBy: trackByIndex" class="dynamic-row"><input [formControlName]="index" [attr.aria-label]="'Accepted answer ' + (index + 1)" placeholder="Accepted answer" /><button type="button" class="icon-button" [disabled]="acceptedAnswers.length <= 1" (click)="removeAcceptedAnswer(index)" [attr.aria-label]="'Remove accepted answer ' + (index + 1)">×</button></div><button type="button" class="secondary-button" (click)="addAcceptedAnswer()">Add accepted answer</button><p *ngIf="shouldShowError('acceptedAnswers')" class="field-error" [id]="errorId('acceptedAnswers')">{{ fieldError('acceptedAnswers') }}</p></div>
+          <div *ngIf="isMatching()" formArrayName="matchingPairs" class="dynamic-list">
+            <div *ngFor="let pair of matchingPairs.controls; let index = index; trackBy: trackByIndex" [formGroupName]="index" class="dynamic-row">
+              <div class="dynamic-field"><label [attr.for]="'question-matching-prompt-' + index">Pair {{ index + 1 }} prompt</label><input [id]="'question-matching-prompt-' + index" formControlName="prompt" placeholder="Prompt" [attr.aria-invalid]="ariaInvalid('matchingPairs')" [attr.aria-describedby]="descriptionId('matchingPairs')" /></div>
+              <div class="dynamic-field"><label [attr.for]="'question-matching-answer-' + index">Pair {{ index + 1 }} answer</label><input [id]="'question-matching-answer-' + index" formControlName="answer" placeholder="Answer" [attr.aria-invalid]="ariaInvalid('matchingPairs')" [attr.aria-describedby]="descriptionId('matchingPairs')" /></div>
+              <button type="button" class="icon-button" [disabled]="matchingPairs.length <= 2" (click)="removeMatchingPair(index)" [attr.aria-label]="'Remove matching pair ' + (index + 1)">×</button>
+            </div>
+            <button type="button" class="secondary-button" (click)="addMatchingPair()">Add pair</button>
+            <p *ngIf="shouldShowError('matchingPairs')" class="field-error" [id]="errorId('matchingPairs')">{{ fieldError('matchingPairs') }}</p>
+          </div>
+          <div *ngIf="isShortAnswer()" formArrayName="acceptedAnswers" class="dynamic-list">
+            <div *ngFor="let answer of acceptedAnswers.controls; let index = index; trackBy: trackByIndex" class="dynamic-row">
+              <div class="dynamic-field"><label [attr.for]="'question-accepted-answer-' + index">Accepted answer {{ index + 1 }}</label><input [id]="'question-accepted-answer-' + index" [formControlName]="index" placeholder="Accepted answer" [attr.aria-invalid]="ariaInvalid('acceptedAnswers')" [attr.aria-describedby]="descriptionId('acceptedAnswers')" /></div>
+              <button type="button" class="icon-button" [disabled]="acceptedAnswers.length <= 1" (click)="removeAcceptedAnswer(index)" [attr.aria-label]="'Remove accepted answer ' + (index + 1)">×</button>
+            </div>
+            <button type="button" class="secondary-button" (click)="addAcceptedAnswer()">Add accepted answer</button>
+            <p *ngIf="shouldShowError('acceptedAnswers')" class="field-error" [id]="errorId('acceptedAnswers')">{{ fieldError('acceptedAnswers') }}</p>
+          </div>
           <div *ngIf="isEssay()" class="field"><label for="question-editor-rubric">Rubric hint <span aria-hidden="true">*</span></label><textarea id="question-editor-rubric" rows="3" formControlName="rubricHint" [attr.aria-invalid]="ariaInvalid('rubricHint')" [attr.aria-describedby]="descriptionId('rubricHint')"></textarea><p *ngIf="shouldShowError('rubricHint')" class="field-error" [id]="errorId('rubricHint')">{{ fieldError('rubricHint') }}</p></div>
         </section>
         <div class="editor-actions"><button type="submit" class="primary-button" [disabled]="isSaving()">{{ isSaving() ? 'Saving…' : isEditing() ? 'Save changes' : 'Create question' }}</button><button type="button" class="secondary-button" [disabled]="isSaving()" (click)="cancel.emit()">Cancel</button></div>
@@ -198,6 +221,7 @@ const acceptedAnswerValidator: ValidatorFn = (control: AbstractControl): Validat
     textarea { resize:vertical; }
     .answer-editor, .live-preview { display:grid; gap:10px; padding:14px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-subtle); }
     .dynamic-list { display:grid; gap:8px; }
+    .dynamic-field { display:grid; gap:5px; flex:1 1 180px; min-width:0; }
     .dynamic-row input { flex:1; }
     .correct-control { display:flex; align-items:center; gap:5px; white-space:nowrap; }
     .correct-control input, .boolean-answer input { width:auto; min-height:0; }

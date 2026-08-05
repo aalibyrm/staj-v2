@@ -381,6 +381,72 @@ describe('QuestionBankComponent', () => {
     expect(facade.loadQuestions).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'behavior', page: 1 }));
   });
 
+  it('canonicalizes unsupported enum URL tokens while preserving scoped and list query state', () => {
+    const fixture = create({
+      course: 'COURSE-SCOPE-01',
+      grade: 'invalid-grade',
+      difficulty: 'invalid-difficulty',
+      status: 'invalid-status',
+      type: 'invalid-type',
+      search: 'behavior',
+      sort: 'id-asc',
+      page: '2'
+    });
+
+    expect(facade.loadQuestions).toHaveBeenCalledWith(expect.objectContaining({
+      course: 'COURSE-SCOPE-01',
+      grade: '',
+      difficulty: '',
+      status: '',
+      type: '',
+      search: 'behavior',
+      sort: 'id-asc',
+      page: 2
+    }));
+    expect(routeValues).toEqual({
+      course: 'COURSE-SCOPE-01',
+      search: 'behavior',
+      sort: 'id-asc'
+    });
+    expect(fixture.nativeElement.querySelector('.inspector-backdrop')).toBeNull();
+  });
+
+  it('exposes accessible inspector tabs and status-aware version panels', () => {
+    const fixture = create({ selected: testQuestion.id });
+    const tabs = [...fixture.nativeElement.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
+    expect(tabs).toHaveLength(3);
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Preview', 'Metadata', 'Versions']);
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true');
+    expect(fixture.nativeElement.querySelectorAll('[role="tabpanel"]')).toHaveLength(3);
+
+    tabs[1].click();
+    fixture.detectChanges();
+    expect(tabs[1].getAttribute('aria-selected')).toBe('true');
+    expect(fixture.nativeElement.querySelector('#question-metadata-panel')?.hasAttribute('hidden')).toBe(false);
+
+    facade.versionHistory.set([{ versionId: 'QUESTION-TEST-101-001-v1', version: 1, publishedAt: testQuestion.updatedAt, changeNote: 'Initial' }]);
+    tabs[2].click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('#question-versions-panel')?.textContent).toContain('Immutable published snapshot');
+
+    facade.selectedQuestion.set({ ...testQuestion, status: 'draft', version: 2 });
+    facade.versionHistory.set([]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.version-entry--current')?.textContent).toContain('Editable current successor');
+    expect(fixture.nativeElement.querySelector('#question-versions-panel')?.textContent).not.toContain('immutable');
+  });
+
+  it('closes the responsive inspector through the backdrop without breaking selection URL sync', () => {
+    const fixture = create({ selected: testQuestion.id });
+    expect(fixture.nativeElement.querySelector('.inspector-backdrop')).not.toBeNull();
+    (fixture.nativeElement.querySelector('.inspector-backdrop') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(facade.clearSelection).toHaveBeenCalled();
+    expect(fixture.componentInstance.selectedRouteId()).toBeNull();
+    expect(routeValues['selected']).toBeUndefined();
+    expect(fixture.nativeElement.querySelector('.inspector-backdrop')).toBeNull();
+  });
+
   it('selects a rendered row and clears the stale selection from the inspector and URL', async () => {
     const fixture = create();
     const rowButton = fixture.nativeElement.querySelector('.row-select') as HTMLButtonElement;

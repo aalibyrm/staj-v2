@@ -212,6 +212,11 @@ const normalizeQuestionSort = (value: unknown): QuestionSort => {
   };
   return aliases[token] ?? DEFAULT_QUESTION_SORT;
 };
+const normalizeQuestionEnum = (value: unknown, supported: readonly string[]): string => {
+  const token = toSafeToken(value);
+  return supported.includes(token) ? token : '';
+};
+
 
 export const normalizeQuestionListQuery = (
   input: QuestionListQueryInput | null | undefined = undefined
@@ -222,10 +227,10 @@ export const normalizeQuestionListQuery = (
   return Object.freeze({
     search: normalizeSearchValue(source['search']).slice(0, MAX_SEARCH_LENGTH),
     course: toSafeToken(courseCandidate),
-    grade: toSafeToken(source['grade']),
-    difficulty: toSafeToken(source['difficulty']),
-    status: toSafeToken(source['status']),
-    type: toSafeToken(source['type']),
+    grade: normalizeQuestionEnum(source['grade'], QUESTION_GRADES),
+    difficulty: normalizeQuestionEnum(source['difficulty'], QUESTION_DIFFICULTIES),
+    status: normalizeQuestionEnum(source['status'], QUESTION_STATUSES),
+    type: normalizeQuestionEnum(source['type'], QUESTION_TYPES),
     sort: normalizeQuestionSort(source['sort']),
     page,
     pageSize: normalizePageSize(source['pageSize'])
