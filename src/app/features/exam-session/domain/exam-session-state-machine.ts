@@ -66,7 +66,8 @@ export const transitionExamSession = (session: ExamSession, nextState: ExamSessi
     version: session.version + 1,
     createdAt: session.createdAt,
     startedAt: session.startedAt,
-    referenceTime: session.referenceTime
+    referenceTime: session.referenceTime,
+    durationMs: session.durationMs
   });
 };
 

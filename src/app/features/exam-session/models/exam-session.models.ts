@@ -48,6 +48,7 @@ export type ExamSession = Readonly<{
   readonly createdAt: string;
   readonly startedAt: string;
   readonly referenceTime: string;
+  readonly durationMs: number;
 }>;
 
 export type ExamSessionCreateInput = Readonly<{
@@ -60,10 +61,18 @@ export type ExamSessionCreateInput = Readonly<{
   readonly createdAt: string;
   readonly startedAt: string;
   readonly referenceTime: string;
+  readonly durationMs: number;
 }>;
 
 const nonblank = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
+
+export const validateExamSessionDurationMs = (value: unknown, field = 'durationMs'): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new ExamSessionDomainError('validation', `${field} must be a positive safe integer in milliseconds.`, field);
+  }
+  return value;
+};
 
 const requiredText = (value: unknown, field: string): string => {
   if (!nonblank(value)) {
@@ -100,8 +109,20 @@ export const createExamSession = (input: ExamSessionCreateInput): ExamSession =>
   const createdAt = requiredText(source['createdAt'], 'createdAt');
   const startedAt = requiredText(source['startedAt'], 'startedAt');
   const referenceTime = requiredText(source['referenceTime'], 'referenceTime');
+  const durationMs = validateExamSessionDurationMs(source.durationMs);
 
-  return Object.freeze({
+  const candidate: {
+    id: ExamSessionId;
+    routeToken: ExamSessionRouteToken;
+    studentId: string;
+    examId: string;
+    state: ExamSessionState;
+    version: number;
+    createdAt: string;
+    startedAt: string;
+    referenceTime: string;
+    durationMs: number;
+  } = {
     id: asExamSessionId(id),
     routeToken: asExamSessionRouteToken(routeToken),
     studentId,
@@ -110,8 +131,10 @@ export const createExamSession = (input: ExamSessionCreateInput): ExamSession =>
     version: rawVersion,
     createdAt,
     startedAt,
-    referenceTime
-  });
+    referenceTime,
+    durationMs
+  };
+  return Object.freeze(candidate);
 };
 
 export const isExamSessionStateValue = (value: unknown): value is ExamSessionState => isExamSessionState(value);

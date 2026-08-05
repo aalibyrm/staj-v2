@@ -5,6 +5,7 @@ import {
   asExamSessionRouteToken,
   createExamSession,
   ExamSessionDomainError,
+  validateExamSessionDurationMs,
   type ExamSession,
   type ExamSessionId,
   type ExamSessionRouteToken,
@@ -28,6 +29,7 @@ export type ExamSessionOpenInput = Readonly<{
   readonly routeToken?: ExamSessionRouteToken | string;
   readonly studentId: string;
   readonly examId: string;
+  readonly durationMs: number;
   readonly createdAt?: string;
   readonly startedAt?: string;
   readonly referenceTime?: string;
@@ -65,6 +67,16 @@ const normalizeText = (value: unknown, field: string): string => {
   }
   return value.trim();
 };
+const normalizeDurationMs = (value: unknown): number => {
+  try {
+    return validateExamSessionDurationMs(value);
+  } catch (error: unknown) {
+    if (error instanceof ExamSessionDomainError) {
+      throw new ExamSessionRepositoryError('validation', error.message, error.target);
+    }
+    throw error;
+  }
+};
 
 const pairKey = (studentId: string, examId: string): string => JSON.stringify([studentId, examId]);
 
@@ -95,7 +107,6 @@ export class ExamSessionRepository {
     this.tokenSource = options.tokenSource ?? defaultTokenSource;
     this.referenceTimeSource = options.referenceTimeSource ?? defaultReferenceTimeSource;
   }
-
   open(input: ExamSessionOpenInput): Observable<ExamSession> {
     return defer(() => {
       if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -104,6 +115,7 @@ export class ExamSessionRepository {
 
       const studentId = normalizeText(input.studentId, 'studentId');
       const examId = normalizeText(input.examId, 'examId');
+      const durationMs = normalizeDurationMs(input.durationMs);
       const key = pairKey(studentId, examId);
       const existingId = this.activePairIndex.get(key);
       if (existingId !== undefined) {
@@ -134,7 +146,8 @@ export class ExamSessionRepository {
         version: 1,
         createdAt,
         startedAt,
-        referenceTime: generatedReferenceTime
+        referenceTime: generatedReferenceTime,
+        durationMs
       });
 
       this.sessions.set(candidate.id, candidate);
@@ -181,15 +194,15 @@ export class ExamSessionRepository {
         );
       }
 
-      const updated = transitionExamSession(current, nextState);
+      const transitioned = transitionExamSession(current, nextState);
       const key = pairKey(current.studentId, current.examId);
-      if (isNonterminal(updated.state)) {
-        this.activePairIndex.set(key, updated.id);
-      } else if (this.activePairIndex.get(key) === updated.id) {
+      if (isNonterminal(transitioned.state)) {
+        this.activePairIndex.set(key, transitioned.id);
+      } else if (this.activePairIndex.get(key) === transitioned.id) {
         this.activePairIndex.delete(key);
       }
-      this.sessions.set(updated.id, updated);
-      return of(updated);
+      this.sessions.set(transitioned.id, transitioned);
+      return of(transitioned);
     });
   }
 

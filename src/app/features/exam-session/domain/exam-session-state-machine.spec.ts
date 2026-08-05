@@ -22,7 +22,8 @@ const sessionAt = (state: ExamSessionState): ExamSession => createExamSession({
   version: 1,
   createdAt: '2026-08-05T10:00:00.000Z',
   startedAt: '2026-08-05T10:00:00.000Z',
-  referenceTime: '2026-08-05T10:00:00.000Z'
+  referenceTime: '2026-08-05T10:00:00.000Z',
+  durationMs: 90_000
 });
 
 const allowedTransitions = EXAM_SESSION_STATES.flatMap((from) =>
@@ -42,6 +43,7 @@ describe('exam-session state machine', () => {
     const next = transitionExamSession(current, to);
     expect(next.state).toBe(to);
     expect(next.version).toBe(current.version + 1);
+    expect(next.durationMs).toBe(current.durationMs);
     expect(current.state).toBe(from);
   });
 
@@ -61,6 +63,7 @@ describe('exam-session state machine', () => {
     expect(next).toBe(current);
     expect(next.state).toBe(before.state);
     expect(next.version).toBe(before.version);
+    expect(next.durationMs).toBe(before.durationMs);
     expect(current).toEqual(before);
   });
 

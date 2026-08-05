@@ -15,6 +15,7 @@ const input = (overrides: Partial<ExamSessionCreateInput> = {}): ExamSessionCrea
   createdAt: '2026-08-05T10:00:00.000Z',
   startedAt: '2026-08-05T10:00:01.000Z',
   referenceTime: '2026-08-05T10:00:01.000Z',
+  durationMs: 90_000,
   ...overrides
 });
 
@@ -31,7 +32,8 @@ describe('ExamSession model', () => {
       version: 1,
       createdAt: '2026-08-05T10:00:00.000Z',
       startedAt: '2026-08-05T10:00:01.000Z',
-      referenceTime: '2026-08-05T10:00:01.000Z'
+      referenceTime: '2026-08-05T10:00:01.000Z',
+      durationMs: 90_000
     });
     expect(Object.isFrozen(session)).toBe(true);
   });
@@ -63,6 +65,17 @@ describe('ExamSession model', () => {
   it('rejects unsupported state and invalid version values', () => {
     expect(() => createExamSession(input({ state: 'paused' as never }))).toThrowError();
     expect(() => createExamSession(input({ version: 0 }))).toThrowError();
+  });
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid duration %s',
+    (durationMs) => {
+      expect(() => createExamSession(input({ durationMs }))).toThrowError();
+    }
+  );
+  it('rejects a missing duration', () => {
+    const { durationMs, ...withoutDuration } = input();
+    void durationMs;
+    expect(() => createExamSession(withoutDuration as unknown as ExamSessionCreateInput)).toThrowError();
   });
 
   it('normalizes student and exam identifiers before freezing the session', () => {

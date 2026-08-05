@@ -34,6 +34,7 @@ const repositoryWithSources = (
 const openInput = (overrides: Partial<ExamSessionOpenInput> = {}): ExamSessionOpenInput => ({
   studentId: 'student-1',
   examId: 'exam-1',
+  durationMs: 90_000,
   ...overrides
 });
 
@@ -68,10 +69,30 @@ describe('ExamSessionRepository', () => {
       version: 1,
       createdAt: 'reference-a',
       startedAt: 'reference-a',
-      referenceTime: 'reference-a'
+      referenceTime: 'reference-a',
+      durationMs: 90_000
     });
     expect(Object.isFrozen(session)).toBe(true);
   });
+  it('retains duration through immutable lifecycle transitions', async () => {
+    const repository = repositoryWithSources();
+    const created = await firstValueFrom(repository.open(openInput({ durationMs: 120_000 })));
+    const active = await firstValueFrom(repository.transition(created.id, 'active', { expectedVersion: created.version }));
+
+    expect(active.durationMs).toBe(120_000);
+    expect(Object.isFrozen(active)).toBe(true);
+    expect(active).not.toBe(created);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid open duration %s without storing a session',
+    async (durationMs) => {
+      const repository = repositoryWithSources();
+
+      await expect(firstValueFrom(repository.open(openInput({ durationMs })))).rejects.toMatchObject({ code: 'validation' });
+      expect(repository.getSnapshot().sessions).toHaveLength(0);
+    }
+  );
 
   it('resolves a token, rejects missing tokens, and keeps generated tokens unique', async () => {
     const repository = repositoryWithSources({
