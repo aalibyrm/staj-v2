@@ -53,7 +53,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | CMP-07 | See 02-architecture-and-technical.md CMP-07 | P02-P07 | TODO | - |
 | CMP-08 | See 02-architecture-and-technical.md CMP-08 | P02-P07 | TODO | - |
 | BR-01 | See 03-business-rules.md BR-01 | P02-P07 | VERIFIED | P02-W03: pure deterministic graph validation and repository create/update enforcement reject self, disconnected, and multi-node prerequisite cycles before mutation with a closed path. |
-| BR-02 | See 03-business-rules.md BR-02 | P02-P07 | VERIFIED | P03-W02/W03/W05: direct and bulk update paths reject published/archived entities per item; published edits require a nonblank change note and atomically create a same-identity draft successor while retaining immutable publication history. |
+| BR-02 | See 03-business-rules.md BR-02 | P02-P07 | VERIFIED | P03-W02/W03/W05/P04-W04: direct and bulk question writes reject published/archived entities; question and exam successors require normalized change notes, retain frozen publication history and pinned question-version snapshots, preserve stable identity, increment version identity, and reject direct published mutation with expected-version conflict protection. |
 | BR-03 | See 03-business-rules.md BR-03 | P02-P07 | TODO | - |
 | BR-04 | See 03-business-rules.md BR-04 | P02-P07 | TODO | - |
 | BR-05 | See 03-business-rules.md BR-05 | P02-P07 | TODO | - |

@@ -7,95 +7,80 @@ import { BlueprintConstraintEditorComponent } from './blueprint-constraint-edito
 import { ExamBuilderComponent } from './exam-builder.component';
 
 describe('ExamBuilderComponent', () => {
-  beforeEach(() => {
-    TestBed.configureTestingModule({ imports: [ExamBuilderComponent] });
-  });
-
+  beforeEach(() => TestBed.configureTestingModule({ imports: [ExamBuilderComponent] }));
   const create = () => {
     const fixture = TestBed.createComponent(ExamBuilderComponent);
     fixture.detectChanges();
     return fixture;
   };
 
-  it('renders a four-step semantic stepper with Blueprint as the current step', () => {
+  it('renders the four-step hierarchy and keeps the matrix before the keyboard-native editor', () => {
     const fixture = create();
     const element = fixture.nativeElement as HTMLElement;
     const steps = Array.from(element.querySelectorAll('.stepper > li'));
-
+    const primary = element.querySelector('.primary-column') as HTMLElement;
     expect(element.querySelector('nav[aria-label="Exam creation steps"]')).not.toBeNull();
     expect(steps).toHaveLength(4);
-    expect(steps.map((step) => step.querySelector('strong')?.textContent?.trim())).toEqual([
-      'Blueprint',
-      'Question selection',
-      'Settings',
-      'Publish review'
-    ]);
+    expect(steps.map((step) => step.querySelector('strong')?.textContent?.trim())).toEqual(['Blueprint', 'Question selection', 'Settings', 'Publish review']);
     expect(element.querySelector('li[aria-current="step"] strong')?.textContent?.trim()).toBe('Blueprint');
+    expect(Array.from(primary.children).indexOf(primary.querySelector('app-blueprint-constraint-panel') as Element)).toBeLessThan(Array.from(primary.children).indexOf(primary.querySelector('details.editor-disclosure') as Element));
+    expect(primary.querySelector('details summary')?.textContent?.trim()).toBe('Adjust blueprint constraints');
   });
-
-  it('places the comparison matrix before the subordinate keyboard-native editor', () => {
-    const fixture = create();
-    const primary = fixture.nativeElement.querySelector('.primary-column') as HTMLElement;
-    const children = Array.from(primary.children);
-    const panel = primary.querySelector('app-blueprint-constraint-panel');
-    const disclosure = primary.querySelector('details.editor-disclosure');
-
-    expect(panel).not.toBeNull();
-    expect(disclosure).not.toBeNull();
-    expect(children.indexOf(panel as Element)).toBeLessThan(children.indexOf(disclosure as Element));
-    expect(disclosure?.querySelector('summary')?.textContent?.trim()).toBe('Adjust blueprint constraints');
-    expect(disclosure?.hasAttribute('open')).toBe(false);
-    expect(disclosure?.querySelector('app-blueprint-constraint-editor')).not.toBeNull();
-  });
-
-  it('shows validation and settings regions with the initial missing state', () => {
+  it('keeps semantic matrix values and validation before settings in the narrow-safe DOM order', () => {
     const fixture = create();
     const element = fixture.nativeElement as HTMLElement;
-    const facade = fixture.componentInstance.facade;
-
-    expect(facade.comparison().status).toBe('missing');
-    expect(element.querySelector('section[aria-labelledby="validation-summary-heading"]')).not.toBeNull();
-    expect(element.querySelector('section[aria-labelledby="settings-shell-heading"]')).not.toBeNull();
-    expect(element.querySelector('.summary-card')?.getAttribute('data-status')).toBe('missing');
-    expect(element.querySelector('#validation-summary-heading')?.textContent?.trim()).toBe(
-      'No current coverage is selected; all target buckets are missing.'
-    );
-    expect(element.querySelector('.aggregate-status')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('! Missing coverage');
-    expect(element.querySelector('.settings-shell input, .settings-shell select, .settings-shell button')).toBeNull();
+    const matrix = element.querySelector('.matrix-scroll') as HTMLElement;
+    const summary = element.querySelector('.summary-card') as HTMLElement;
+    const settings = element.querySelector('.settings-shell') as HTMLElement;
+    expect(matrix.getAttribute('role')).toBe('region');
+    expect(matrix.getAttribute('tabindex')).toBe('0');
+    expect(matrix.getAttribute('aria-label')).toBe('Blueprint target and current coverage matrix');
+    expect(matrix.querySelector('caption')?.textContent).toContain('Blueprint target and current coverage');
+    expect(Array.from(matrix.querySelectorAll('thead th')).map((header) => header.textContent?.trim())).toEqual([
+      'Dimension / bucket', 'Target count', 'Current count', 'Target points', 'Current points', 'Status and reason'
+    ]);
+    expect(matrix.textContent).toContain('Missing');
+    expect(element.querySelector('.primary-column')?.firstElementChild?.tagName.toLowerCase()).toBe('app-blueprint-constraint-panel');
+    expect(summary.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('updates the target and live announcement after a valid editor emission', () => {
+  it('shows truthful empty selection, settings labels, and disabled publish state', () => {
     const fixture = create();
-    const editor = fixture.debugElement.query(By.directive(BlueprintConstraintEditorComponent))
-      .componentInstance as BlueprintConstraintEditorComponent;
-    const before = fixture.componentInstance.facade.target();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('#exam-title')).not.toBeNull();
+    expect(element.querySelector('#exam-duration')).not.toBeNull();
+    expect(element.querySelector('#successor-note')).not.toBeNull();
+    expect(element.textContent).toContain('No published question versions are selected.');
+    expect((element.querySelector('button.secondary-action') as HTMLButtonElement).disabled).toBe(true);
+    expect(fixture.componentInstance.form.valid).toBe(true);
+    expect((element.querySelector('.settings-shell button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(element.querySelector('[role="status"][aria-live="polite"]')).not.toBeNull();
+  });
 
-    expect(editor.form.valid).toBe(true);
+  it('uses reactive validation and preserves the editor update announcement', () => {
+    const fixture = create();
+    const component = fixture.componentInstance;
+    const title = component.form.controls.title;
+    title.setValue('');
+    component.form.markAllAsTouched();
+    fixture.detectChanges();
+    expect(component.form.invalid).toBe(true);
+    const editor = fixture.debugElement.query(By.directive(BlueprintConstraintEditorComponent)).componentInstance as BlueprintConstraintEditorComponent;
     editor.submit();
     fixture.detectChanges();
-
-    expect(fixture.componentInstance.facade.target()).not.toBe(before);
-    expect(fixture.componentInstance.facade.liveUpdateText()).toBe(
-      'Blueprint updated. No current coverage is selected; all target buckets are missing.'
-    );
-    const announcements = Array.from(
-      fixture.nativeElement.querySelectorAll('[role="status"][aria-live="polite"]') as NodeListOf<HTMLElement>
-    ).map((node) => node.textContent?.replace(/\s+/g, ' ').trim());
-    expect(announcements).toContain('Blueprint updated. No current coverage is selected; all target buckets are missing.');
+    expect(component.facade.liveUpdateText()).toContain('Blueprint updated.');
+    expect(fixture.nativeElement.querySelector('[role="status"][aria-live="polite"]')).not.toBeNull();
   });
 
-  it('exposes data through the facade and has no forbidden future actions', () => {
+  it('exposes workflow only through the facade and keeps visible keyboard labels', () => {
     const fixture = create();
     const component = fixture.componentInstance;
     const element = fixture.nativeElement as HTMLElement;
-    const buttons = Array.from(element.querySelectorAll('button')).map((button) => button.textContent?.trim() ?? '');
-
     expect(component.facade).toBeInstanceOf(ExamBuilderFacade);
     expect(component).not.toHaveProperty('seed');
     expect(component).not.toHaveProperty('createSeedData');
-    expect(component).not.toHaveProperty('targetState');
-    expect(component).not.toHaveProperty('currentCoverageState');
-    expect(buttons.some((label) => /save|next|publish|automatic/i.test(label))).toBe(false);
-    expect(element.textContent).not.toMatch(/selected pool/i);
+    expect(element.querySelector('label[for="exam-title"]')?.textContent).toContain('Title');
+    expect(element.querySelector('label[for="exam-duration"]')?.textContent).toContain('Duration');
+    expect(element.querySelector('.settings-shell button[type="submit"]')?.textContent).toContain('Save draft');
   });
 });

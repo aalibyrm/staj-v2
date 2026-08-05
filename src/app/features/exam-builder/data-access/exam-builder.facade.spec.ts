@@ -102,4 +102,15 @@ describe('ExamBuilderFacade', () => {
     expect(Object.isFrozen(comparison.dimensions[0].buckets)).toBe(true);
     expect(Object.isFrozen(comparison.dimensions[0].buckets[0])).toBe(true);
   });
+
+  it('tracks draft request state, normalized settings aliases, and truthful pinned selection readiness', () => {
+    const facade = new ExamBuilderFacade();
+    expect(facade.requestState().status).toBe('idle');
+    expect(facade.selectedPinnedSnapshots()).toEqual([]);
+    expect(facade.publishReady()).toBe(false);
+    expect(facade.publishReadiness()).toBe(false);
+    expect(facade.normalizedSettings()).toEqual(facade.settings());
+    expect(facade.setSettings({ title: ' ', durationMinutes: 0, rules: [] })).toBe(false);
+    expect(facade.settings().title).toBe('Untitled exam');
+  });
 });
