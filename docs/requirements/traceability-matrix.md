@@ -54,7 +54,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | CMP-08 | See 02-architecture-and-technical.md CMP-08 | P02-P07 | TODO | - |
 | BR-01 | See 03-business-rules.md BR-01 | P02-P07 | VERIFIED | P02-W03: pure deterministic graph validation and repository create/update enforcement reject self, disconnected, and multi-node prerequisite cycles before mutation with a closed path. |
 | BR-02 | See 03-business-rules.md BR-02 | P02-P07 | VERIFIED | P03-W02/W03/W05/P04-W04: direct and bulk question writes reject published/archived entities; question and exam successors require normalized change notes, retain frozen publication history and pinned question-version snapshots, preserve stable identity, increment version identity, and reject direct published mutation with expected-version conflict protection. |
-| BR-03 | See 03-business-rules.md BR-03 | P02-P07 | TODO | - |
+| BR-03 | See 03-business-rules.md BR-03 | P02-P07 | VERIFIED | P04-W02/W04/W05: target/current comparison exposes every missing/excess count and point bucket; UI readiness and repository mutation gates independently reject publication until pinned snapshots exactly satisfy the immutable blueprint. |
 | BR-04 | See 03-business-rules.md BR-04 | P02-P07 | TODO | - |
 | BR-05 | See 03-business-rules.md BR-05 | P02-P07 | TODO | - |
 | BR-06 | See 03-business-rules.md BR-06 | P02-P07 | TODO | - |
@@ -62,7 +62,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | BR-08 | See 03-business-rules.md BR-08 | P02-P07 | TODO | - |
 | BR-09 | See 03-business-rules.md BR-09 | P02-P07 | VERIFIED | P02-W06: completed and locked content IDs are removed before recommendation ranking, cannot reappear through mastery priority, and remaining entries are renumbered contiguously. |
 | BR-10 | See 03-business-rules.md BR-10 | P02-P07 | TODO | - |
-| BR-11 | See 03-business-rules.md BR-11 | P02-P07 | TODO | - |
+| BR-11 | See 03-business-rules.md BR-11 | P02-P07 | IN_PROGRESS | P04-W05: successful exam publication and published-version override each record exactly one typed audit event after mutation with actor, persisted reference time, target, readable before/after version state, and mandatory override reason; score/session audit operations remain later. |
 | ADV-01 | See 03-business-rules.md ADV-01 | P02/P04/P05/P07 | TODO | - |
 | ADV-02 | See 03-business-rules.md ADV-02 | P02/P04/P05/P07 | TODO | - |
 | ADV-03 | See 03-business-rules.md ADV-03 | P02/P04/P05/P07 | VERIFIED | P04-W03: deterministic memoized exhaustive search attempts all simultaneous blueprint count/point constraints, groups candidates by stable question identity to prevent reuse across versions, and proves a non-greedy feasible solution when one exists. |
@@ -80,8 +80,8 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | AC-09 | See 04-acceptance-and-delivery.md AC-09 | P02-P08 | VERIFIED | P01-W05/P01-REV: live role switching produced exact Student 3, Instructor 5, Measurement 1, Program Manager 2, Observer 1 read-only, and Administrator 0 datasets; denied IDs/text stayed absent, malformed scope targets failed closed, and direct routes remained guarded. |
 | AC-10 | See 04-acceptance-and-delivery.md AC-10 | P02-P08 | TODO | - |
 | AC-11 | See 04-acceptance-and-delivery.md AC-11 | P02-P08 | IN_PROGRESS | P01-W02-W04/P01-REV: reusable loading, empty, slow, error/retry, and unauthorized patterns plus responsive public denial, scoped dashboard, and Courses empty-state demonstrations passed 1440x900/390x844 gates without console/page errors; main feature screens remain later. |
-| AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | TODO | - |
-| AC-13 | See 04-acceptance-and-delivery.md AC-13 | P02-P08 | TODO | - |
+| AC-12 | See 04-acceptance-and-delivery.md AC-12 | P02-P08 | IN_PROGRESS | P04-W05: exam publication requires an accessible in-page immutable-action confirmation with cancel/Escape, focus transfer/restore, and repeat-submit lock; published-version override already requires a normalized nonblank reason. Other critical actions remain later. |
+| AC-13 | See 04-acceptance-and-delivery.md AC-13 | P02-P08 | IN_PROGRESS | P04-W05: exam publish/override audit drafts contain stable action type, authorized actor, persisted occurrence time, target type/id, compact readable before/after status/version/versionId, and the mandatory override reason; audit-history presentation remains later. |
 | AC-14 | See 04-acceptance-and-delivery.md AC-14 | P02-P08 | VERIFIED | Phase 00 exit review: production build passed at 227.95 kB initial size; live startup redirected correctly with no console/page errors. |
 | DEL-01 | See 04-acceptance-and-delivery.md DEL-01 | P08 | IN_PROGRESS | P00-W01: npm workspace and canonical lockfile prepared in the tracked Git repository; final delivery remains P08. |
 | DEL-02 | See 04-acceptance-and-delivery.md DEL-02 | P08 | TODO | - |

@@ -2,6 +2,7 @@ import { Injectable, Optional } from '@angular/core';
 import { defer, map, type Observable } from 'rxjs';
 
 import { DEFAULT_MOCK_SCENARIO, MockTransport, type MockScenarioControls } from '../../../core/api/mock-transport';
+import { AuditPort, type AuditEventDraft } from '../../../core/observability/observability.ports';
 import { SessionStore } from '../../../core/auth/session.store';
 import { DATA_SCOPE_KINDS, ROLE_CODES, type AuthSession, type RoleCode } from '../../../core/auth/authorization';
 import {
@@ -70,6 +71,7 @@ const snapshotsOf = (input: ExamCreateInput | ExamUpdateInput | Record<string, u
 @Injectable({ providedIn: 'root' })
 export class ExamRepository {
   private readonly transport: MockTransport;
+  private readonly audit: AuditPort | null;
   private readonly sessionStore: SessionStore;
   private readonly currentEntities = new Map<ExamId, Exam>();
   private readonly publishedHistory = new Map<ExamId, Exam[]>();
@@ -78,10 +80,12 @@ export class ExamRepository {
 
   constructor(
     @Optional() transport: MockTransport | null = null,
-    @Optional() sessionStore: SessionStore | null = null
+    @Optional() sessionStore: SessionStore | null = null,
+    @Optional() audit: AuditPort | null = null
   ) {
     this.transport = transport ?? new MockTransport();
     this.sessionStore = sessionStore ?? new SessionStore();
+    this.audit = audit;
   }
 
   createDraft(input: ExamCreateInput, options: ExamRepositoryOperationOptions = {}): Observable<Exam> {
@@ -185,6 +189,23 @@ export class ExamRepository {
         history.push(published);
         this.publishedHistory.set(latest.id, history);
         this.currentEntities.set(latest.id, published);
+        this.recordAudit({
+          action: 'exam.publish',
+          actor: String(session?.accountId ?? 'unknown-account'),
+          targetType: 'exam',
+          targetId: String(published.id),
+          occurredAt: published.updatedAt,
+          before: {
+            status: latest.status,
+            version: latest.version,
+            versionId: latest.versionId
+          },
+          after: {
+            status: published.status,
+            version: published.version,
+            versionId: published.versionId
+          }
+        });
         return cloneExam(published);
       }, options);
     });
@@ -223,6 +244,24 @@ export class ExamRepository {
           questionVersions: latest.questionVersions.map((version) => version)
         });
         this.currentEntities.set(latest.id, successor);
+        this.recordAudit({
+          action: 'exam.override',
+          actor: String(session?.accountId ?? 'unknown-account'),
+          targetType: 'exam',
+          targetId: String(successor.id),
+          occurredAt: successor.updatedAt,
+          before: {
+            status: latest.status,
+            version: latest.version,
+            versionId: latest.versionId
+          },
+          after: {
+            status: successor.status,
+            version: successor.version,
+            versionId: successor.versionId
+          },
+          mandatoryReason: note
+        });
         return cloneExam(successor);
       }, options);
     });
@@ -302,6 +341,14 @@ export class ExamRepository {
     const exam = createExam(input);
     if (exam === null) throw this.error('validation', 'The exam aggregate is invalid.', input.id);
     return exam;
+  }
+  private recordAudit(event: AuditEventDraft): void {
+    if (this.audit === null) return;
+    try {
+      void Promise.resolve(this.audit.record(event)).catch(() => undefined);
+    } catch {
+      return;
+    }
   }
 
   private execute<T>(method: 'GET' | 'POST' | 'PATCH', url: string, body: unknown, factory: () => T, options: ExamRepositoryOperationOptions): Observable<T> {

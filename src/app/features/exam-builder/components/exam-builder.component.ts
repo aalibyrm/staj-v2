@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, ViewChild, afterNextRender, computed, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 
 import { BlueprintConstraintEditorComponent } from './blueprint-constraint-editor.component';
@@ -79,9 +79,33 @@ import type { ExamRuleInput } from '../models/exam.models';
               <p id="settings-errors" class="field-error" *ngIf="form.invalid && form.touched">Enter a nonblank title and positive whole-minute duration.</p>
               <div class="action-row">
                 <button type="submit" [disabled]="form.invalid || isBusy()">{{ facade.currentExam()?.status === 'published' ? 'Create editable successor' : 'Save draft' }}</button>
-                <button type="button" class="secondary-action" [disabled]="!facade.publishReady() || isBusy()" (click)="publish()">Publish exam</button>
+                <button #publishTriggerButton type="button" class="secondary-action" [disabled]="!canOpenPublishConfirmation()" (click)="publish()">Publish exam</button>
               </div>
             </form>
+
+            <section
+              *ngIf="publishConfirmationOpen()"
+              #publishConfirmationPanel
+              class="publish-confirmation"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="publish-confirmation-title"
+              aria-describedby="publish-confirmation-description"
+              tabindex="-1"
+              (keydown.escape)="cancelPublish()"
+            >
+              <span class="eyebrow">Confirm publication</span>
+              <h2 id="publish-confirmation-title">Publish this exam version?</h2>
+              <p id="publish-confirmation-description">Publishing makes this version immutable. Direct edits will be blocked; future changes require an editable successor.</p>
+              <dl class="publish-confirmation-details">
+                <div><dt>Exam</dt><dd>{{ facade.currentExam()?.title }} ({{ facade.currentExam()?.id }})</dd></div>
+                <div><dt>Version</dt><dd>{{ facade.currentExam()?.versionId }}</dd></div>
+              </dl>
+              <div class="publish-confirmation-actions">
+                <button type="button" [disabled]="publishSubmissionLocked() || isBusy()" [attr.aria-busy]="publishSubmissionLocked()" (click)="confirmPublish()">Confirm publish</button>
+                <button type="button" class="secondary-action" [disabled]="publishSubmissionLocked()" (click)="cancelPublish()">Cancel</button>
+              </div>
+            </section>
           </section>
 
           <section class="selection-shell" aria-labelledby="selection-heading">
@@ -152,6 +176,13 @@ import type { ExamRuleInput } from '../models/exam.models';
     .workflow-feedback[data-status="error"], .workflow-feedback[data-status="conflict"], .workflow-feedback[data-status="unauthorized"] { border-left-color:var(--ui-danger); }
     .workflow-feedback[data-status="success"] { border-left-color:var(--ui-success); }
     .workflow-feedback[data-status="saving"], .workflow-feedback[data-status="publishing"], .workflow-feedback[data-status="loading"] { border-left-color:var(--ui-warning); }
+    .publish-confirmation { display:grid; gap:10px; padding:16px; border:2px solid var(--ui-primary); border-radius:var(--ui-radius-md); background:var(--ui-primary-soft); }
+    .publish-confirmation p { color:var(--ui-text); font-size:13px; line-height:1.45; }
+    .publish-confirmation-details { display:grid; gap:7px; margin:0; font-size:12px; }
+    .publish-confirmation-details div { display:flex; justify-content:space-between; gap:10px; }
+    .publish-confirmation-details dt { color:var(--ui-text-muted); font-weight:750; }
+    .publish-confirmation-details dd { margin:0; color:var(--ui-text); font-weight:750; text-align:right; overflow-wrap:anywhere; }
+    .publish-confirmation-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:2px; }
     .snapshot-list, .history-list { display:grid; gap:7px; margin:0; padding-left:18px; font-size:12px; min-width:0; }
     .snapshot-list li, .history-list li { display:grid; gap:2px; min-width:0; }
     .snapshot-list span, .history-list strong { overflow-wrap:anywhere; }
@@ -169,6 +200,11 @@ export class ExamBuilderComponent {
     rules: new FormControl('', { nonNullable: true }),
     changeNote: new FormControl('', { nonNullable: true })
   });
+  readonly publishConfirmationOpen = signal(false);
+  readonly publishSubmissionLocked = signal(false);
+  @ViewChild('publishTriggerButton') private publishTriggerButton?: ElementRef<HTMLButtonElement>;
+  @ViewChild('publishConfirmationPanel') private publishConfirmationPanel?: ElementRef<HTMLElement>;
+  private readonly renderInjector = inject(Injector);
   readonly unmetRows = computed(() => {
     const comparison = this.facade.comparison();
     return [...comparison.outcomeBuckets, ...comparison.difficultyBuckets, ...comparison.questionTypeBuckets].filter((row) => row.status !== 'met');
@@ -192,8 +228,43 @@ export class ExamBuilderComponent {
   }
 
   publish(): void {
-    if (this.isBusy() || !this.facade.publishReady()) return;
-    this.facade.publishExam(this.form.controls.changeNote.value).subscribe({ error: () => undefined });
+    this.openPublishConfirmation();
+  }
+
+  canOpenPublishConfirmation(): boolean {
+    const exam = this.facade.currentExam();
+    return exam?.status === 'draft' && this.facade.publishReady() && !this.isBusy() && !this.publishSubmissionLocked();
+  }
+
+  openPublishConfirmation(): void {
+    if (!this.canOpenPublishConfirmation()) return;
+    this.publishConfirmationOpen.set(true);
+    afterNextRender({
+      write: () => {
+        const panel = this.publishConfirmationPanel?.nativeElement;
+        if (this.publishConfirmationOpen() && panel) panel.focus();
+      }
+    }, { injector: this.renderInjector });
+  }
+
+  cancelPublish(): void {
+    if (!this.publishConfirmationOpen()) return;
+    this.publishConfirmationOpen.set(false);
+    this.publishTriggerButton?.nativeElement.focus();
+  }
+
+  confirmPublish(): void {
+    if (!this.publishConfirmationOpen() || !this.canOpenPublishConfirmation()) return;
+    this.publishSubmissionLocked.set(true);
+    this.publishConfirmationOpen.set(false);
+    const complete = (): void => {
+      this.publishSubmissionLocked.set(false);
+      this.publishTriggerButton?.nativeElement.focus();
+    };
+    this.facade.publishExam(this.form.controls.changeNote.value).subscribe({
+      next: complete,
+      error: complete
+    });
   }
 
   private rulesFromText(value: string): readonly ExamRuleInput[] {

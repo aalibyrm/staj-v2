@@ -1,14 +1,68 @@
 import { By } from '@angular/platform-browser';
 import { TestBed } from '@angular/core/testing';
-import { describe, expect, it, beforeEach } from 'vitest';
+import { signal } from '@angular/core';
+import { NEVER, of, type Observable } from 'rxjs';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 
 import { ExamBuilderFacade } from '../data-access/exam-builder.facade';
+import { compareExamBlueprint, createExamBlueprint, type ExamBlueprintCurrentCoverageInput } from '../models/exam-blueprint.models';
+import type { Exam } from '../models/exam.models';
+import { asLearningOutcomeId } from '../../question-bank/models/question.models';
 import { BlueprintConstraintEditorComponent } from './blueprint-constraint-editor.component';
 import { ExamBuilderComponent } from './exam-builder.component';
 
+type PublishExamStub = (changeNote?: string) => Observable<Exam>;
+
+const publishExamStub = (publishExam: PublishExamStub): ExamBuilderFacade => {
+  const target = createExamBlueprint({
+    targetQuestionCount: 1,
+    targetPoints: 2,
+    outcomeBuckets: [{ key: 'OUT-1', targetQuestionCount: 1, targetPoints: 2 }],
+    difficultyBuckets: [{ key: 'easy', targetQuestionCount: 1, targetPoints: 2 }],
+    questionTypeBuckets: [{ key: 'single-choice', targetQuestionCount: 1, targetPoints: 2 }]
+  });
+  if (target === null) throw new Error('Expected a valid test blueprint.');
+  const coverage: ExamBlueprintCurrentCoverageInput = {
+    outcomeBuckets: [{ key: asLearningOutcomeId('OUT-1'), currentQuestionCount: 1, currentPoints: 2 }],
+    difficultyBuckets: [{ key: 'easy', currentQuestionCount: 1, currentPoints: 2 }],
+    questionTypeBuckets: [{ key: 'single-choice', currentQuestionCount: 1, currentPoints: 2 }]
+  };
+  const exam = {
+    id: 'EXAM-1',
+    versionId: 'EXAM-1-v1',
+    version: 1,
+    status: 'draft',
+    title: 'Algebra exam',
+    durationMinutes: 30,
+    rules: [],
+    blueprint: target,
+    questionVersions: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    publishedAt: null,
+    publishedBy: null,
+    changeNote: ''
+  } as unknown as Exam;
+  return {
+    target: signal(target),
+    comparison: signal(compareExamBlueprint(target, coverage)),
+    outcomeChoices: signal([]),
+    liveUpdateText: signal('Blueprint is valid.'),
+    currentExam: signal(exam),
+    history: signal([]),
+    selectedPinnedSnapshots: signal([]),
+    requestState: signal({ status: 'idle' as const }),
+    actionableMessage: signal('The draft is ready to publish.'),
+    errorMessage: signal(''),
+    publishReady: signal(true),
+    applyBlueprint: vi.fn(),
+    publishExam
+  } as unknown as ExamBuilderFacade;
+};
 describe('ExamBuilderComponent', () => {
   beforeEach(() => TestBed.configureTestingModule({ imports: [ExamBuilderComponent] }));
-  const create = () => {
+  const create = (facade?: ExamBuilderFacade) => {
+    if (facade !== undefined) TestBed.overrideProvider(ExamBuilderFacade, { useValue: facade });
     const fixture = TestBed.createComponent(ExamBuilderComponent);
     fixture.detectChanges();
     return fixture;
@@ -50,7 +104,10 @@ describe('ExamBuilderComponent', () => {
     expect(element.querySelector('#exam-title')).not.toBeNull();
     expect(element.querySelector('#exam-duration')).not.toBeNull();
     expect(element.querySelector('#successor-note')).not.toBeNull();
-    expect(element.textContent).toContain('No published question versions are selected.');
+    expect((element.querySelector('button.secondary-action') as HTMLButtonElement).disabled).toBe(true);
+    (element.querySelector('button.secondary-action') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(fixture.componentInstance.publishConfirmationOpen()).toBe(false);
     expect((element.querySelector('button.secondary-action') as HTMLButtonElement).disabled).toBe(true);
     expect(fixture.componentInstance.form.valid).toBe(true);
     expect((element.querySelector('.settings-shell button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
@@ -82,5 +139,64 @@ describe('ExamBuilderComponent', () => {
     expect(element.querySelector('label[for="exam-title"]')?.textContent).toContain('Title');
     expect(element.querySelector('label[for="exam-duration"]')?.textContent).toContain('Duration');
     expect(element.querySelector('.settings-shell button[type="submit"]')?.textContent).toContain('Save draft');
+  });
+
+  it('opens a labelled keyboard-accessible confirmation and cancels without a facade call', async () => {
+    const publishExam = vi.fn(() => NEVER);
+    const fixture = create(publishExamStub(publishExam));
+    const trigger = fixture.nativeElement.querySelector('button.secondary-action') as HTMLButtonElement;
+
+    expect(trigger.disabled).toBe(false);
+    trigger.click();
+    await Promise.resolve();
+    expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog).not.toBeNull();
+    expect(document.activeElement).toBe(dialog);
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.getAttribute('aria-labelledby')).toBe('publish-confirmation-title');
+    expect(dialog.getAttribute('aria-describedby')).toBe('publish-confirmation-description');
+    expect(dialog.textContent).toContain('EXAM-1-v1');
+    expect(dialog.textContent).toContain('immutable');
+
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
+    expect(publishExam).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('confirms once, closes, and locks the publish trigger while the request is pending', () => {
+    const publishExam = vi.fn(() => NEVER);
+    const fixture = create(publishExamStub(publishExam));
+    const trigger = fixture.nativeElement.querySelector('button.secondary-action') as HTMLButtonElement;
+
+    trigger.click();
+    fixture.detectChanges();
+    (fixture.nativeElement.querySelector('.publish-confirmation-actions button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    fixture.componentInstance.confirmPublish();
+
+    expect(publishExam).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.publishConfirmationOpen()).toBe(false);
+    expect(fixture.componentInstance.publishSubmissionLocked()).toBe(true);
+    expect(trigger.disabled).toBe(true);
+  });
+
+  it('restores trigger focus after a completed confirmation request', () => {
+    const publishExam = vi.fn(() => of(undefined as unknown as Exam));
+    const fixture = create(publishExamStub(publishExam));
+    const trigger = fixture.nativeElement.querySelector('button.secondary-action') as HTMLButtonElement;
+
+    trigger.click();
+    fixture.detectChanges();
+    (fixture.nativeElement.querySelector('.publish-confirmation-actions button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(publishExam).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.publishSubmissionLocked()).toBe(false);
+    expect(document.activeElement).toBe(trigger);
   });
 });

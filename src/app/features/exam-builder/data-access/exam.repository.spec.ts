@@ -2,6 +2,7 @@ import { firstValueFrom } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 
 import { MockTransport } from '../../../core/api/mock-transport';
+import { AuditPort, type AuditEventDraft } from '../../../core/observability/observability.ports';
 import { DEMO_ACCOUNTS } from '../../../core/auth/authorization';
 import { SessionStore } from '../../../core/auth/session.store';
 import {
@@ -34,6 +35,9 @@ const input = {
   questionVersions: [snapshot]
 };
 
+const auditFor = (events: AuditEventDraft[]): AuditPort =>
+  ({ record: (event: AuditEventDraft): void => { events.push(event); } } as unknown as AuditPort);
+
 describe('ExamRepository guarded version workflow', () => {
   it('publishes exact pinned coverage, retains history, and creates same-id successor', async () => {
     const store = sessionFor('INSTRUCTOR');
@@ -63,5 +67,65 @@ describe('ExamRepository guarded version workflow', () => {
     await expect(firstValueFrom(repository.createSuccessor(draft.id, { changeNote: ' ' }, { expectedVersion: draft.version }))).rejects.toMatchObject({ code: 'validation' });
     await expect(firstValueFrom(repository.publish(draft.id, {}, { expectedVersion: draft.version }))).rejects.toMatchObject({ code: 'validation' });
     expect(repository.getSnapshot()).toEqual(before);
+  });
+
+  it('emits one readable audit event after authorized publication using persisted identity', async () => {
+    const events: AuditEventDraft[] = [];
+    const store = sessionFor('INSTRUCTOR');
+    const repository = new ExamRepository(new MockTransport(), store, auditFor(events));
+    const draft = await firstValueFrom(repository.createDraft(input));
+    const published = await firstValueFrom(repository.publish(draft.id, { changeNote: ' First release ' }, { expectedVersion: draft.version }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      action: 'exam.publish',
+      actor: store.session()?.accountId,
+      targetType: 'exam',
+      targetId: published.id,
+      occurredAt: published.updatedAt,
+      before: { status: 'draft', version: draft.version, versionId: draft.versionId },
+      after: { status: 'published', version: published.version, versionId: published.versionId }
+    });
+  });
+
+  it('emits one distinct override audit with a normalized mandatory reason after successor creation', async () => {
+    const events: AuditEventDraft[] = [];
+    const repository = new ExamRepository(new MockTransport(), sessionFor('INSTRUCTOR'), auditFor(events));
+    const draft = await firstValueFrom(repository.createDraft(input));
+    const published = await firstValueFrom(repository.publish(draft.id, {}, { expectedVersion: draft.version }));
+
+    await expect(firstValueFrom(repository.createSuccessor(published.id, { changeNote: '   ' }, { expectedVersion: published.version }))).rejects.toMatchObject({ code: 'validation' });
+    expect(events).toHaveLength(1);
+
+    const successor = await firstValueFrom(repository.createSuccessor(published.id, { changeNote: '  Clarify wording  ' }, { expectedVersion: published.version }));
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({
+      action: 'exam.override',
+      targetType: 'exam',
+      targetId: successor.id,
+      occurredAt: successor.updatedAt,
+      before: { status: 'published', version: published.version, versionId: published.versionId },
+      after: { status: 'draft', version: successor.version, versionId: successor.versionId },
+      mandatoryReason: 'Clarify wording'
+    });
+  });
+
+  it('emits no audit for failed, retried, conflicting, unauthorized, or invalid publication', async () => {
+    const events: AuditEventDraft[] = [];
+    const store = sessionFor('INSTRUCTOR');
+    const repository = new ExamRepository(new MockTransport(), store, auditFor(events));
+    const draft = await firstValueFrom(repository.createDraft(input));
+
+    repository.setMockScenario({ outcome: 'service-error', transientServiceFailures: 2, retryLimit: 1 });
+    await expect(firstValueFrom(repository.publish(draft.id, {}, { expectedVersion: draft.version }))).rejects.toBeDefined();
+    repository.resetMockScenario();
+    repository.setMockScenario({ outcome: 'conflict' });
+    await expect(firstValueFrom(repository.publish(draft.id, {}, { expectedVersion: draft.version }))).rejects.toBeDefined();
+    repository.resetMockScenario();
+    await expect(firstValueFrom(repository.publish(draft.id, {}, { session: sessionFor('STUDENT').session(), expectedVersion: draft.version }))).rejects.toMatchObject({ code: 'unauthorized' });
+    const invalidDraft = await firstValueFrom(repository.createDraft({ ...input, questionVersions: [] }));
+    await expect(firstValueFrom(repository.publish(invalidDraft.id, {}, { expectedVersion: invalidDraft.version }))).rejects.toMatchObject({ code: 'validation' });
+
+    expect(events).toHaveLength(0);
   });
 });
