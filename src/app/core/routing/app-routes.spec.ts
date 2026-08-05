@@ -153,6 +153,26 @@ describe('application routes', () => {
       );
     }
   });
+  it('resolves the lazy outcome map for its three roles and denies an unrelated role', async () => {
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const sessionStore = TestBed.inject(SessionStore);
+
+    for (const role of ['INSTRUCTOR', 'PROGRAM_MANAGER', 'PLATFORM_ADMINISTRATOR'] as const) {
+      sessionStore.signIn(accountIdFor(role));
+      await harness.navigateByUrl('/unauthorized');
+      await harness.navigateByUrl('/outcomes/map');
+      expect(router.url).toBe('/outcomes/map');
+      expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('Outcomes map');
+    }
+
+    sessionStore.signIn(accountIdFor('STUDENT'));
+    await harness.navigateByUrl('/unauthorized');
+    await harness.navigateByUrl('/outcomes/map');
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Foutcomes%2Fmap');
+    expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('Access denied');
+  });
+
 
   it('lazy-loads the guarded outcomes editor and map while leaving /outcomes unchanged', async () => {
     const outcomesRoute = adaptiveLearningRoutes.find((route) => route.path === 'outcomes');
@@ -172,7 +192,9 @@ describe('application routes', () => {
     expect(mapRoute?.canMatch).toContain(authGuard);
     expect(mapRoute?.data?.['title']).toBe('Outcomes map');
     expect(mapRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
-      ROUTE_CAPABILITIES.programWorkspace
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.programWorkspace,
+      ROUTE_CAPABILITIES.platformAdministration
     ]);
     expect(await mapRoute?.loadComponent?.()).toBe(OutcomeGraphComponent);
   });

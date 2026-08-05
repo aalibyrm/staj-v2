@@ -173,7 +173,11 @@ const ROUTE_CAPABILITY_PATHS: readonly RouteCapabilityPath[] = deepFreeze([
   },
   {
     pattern: ['outcomes', 'map'],
-    capabilities: [ROUTE_CAPABILITIES.programWorkspace]
+    capabilities: [
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.programWorkspace,
+      ROUTE_CAPABILITIES.platformAdministration
+    ]
   },
   {
     pattern: ['question-bank'],

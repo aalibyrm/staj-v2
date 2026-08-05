@@ -96,7 +96,11 @@ export const adaptiveLearningRoutes: Routes = [
     canMatch: [authGuard],
     data: {
       title: 'Outcomes map',
-      [ROUTE_CAPABILITIES_DATA_KEY]: [ROUTE_CAPABILITIES.programWorkspace]
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.programWorkspace,
+        ROUTE_CAPABILITIES.platformAdministration
+      ]
     },
     loadComponent: loadOutcomeGraph
   },

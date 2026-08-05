@@ -21,7 +21,7 @@ import { distinctUntilChanged, startWith } from 'rxjs';
 import cytoscape from 'cytoscape';
 
 import { LearningDomainFacade } from '../data-access/learning-domain.facade';
-import { LearningDomainError } from '../data-access/learning-domain.repository';
+import { LearningDomainError, type ContentAccessContext } from '../data-access/learning-domain.repository';
 import {
   LIFECYCLE_STATES,
   type ContentItem,
@@ -30,6 +30,7 @@ import {
   type LearningOutcome,
   type LearningOutcomeId,
   type LearningOutcomeStatus,
+  type LearningPathEntry,
   type LifecycleState
 } from '../models/learning-domain.models';
 
@@ -53,7 +54,7 @@ export interface OutcomeGraphNode {
   readonly content: readonly ContentItem[];
   readonly isRisky: boolean;
   readonly riskLabel: string;
-  readonly masteryLabel: 'Not available';
+  readonly masteryLabel: 'Not measured';
 }
 
 export interface OutcomeGraphEdge {
@@ -65,6 +66,11 @@ export interface OutcomeGraphEdge {
 export interface OutcomeGraphModel {
   readonly nodes: readonly OutcomeGraphNode[];
   readonly edges: readonly OutcomeGraphEdge[];
+}
+
+export interface OutcomeGraphRecommendation {
+  readonly item: ContentItem;
+  readonly entry: LearningPathEntry;
 }
 
 export interface OutcomeGraphFilters {
@@ -101,6 +107,14 @@ const defaultGraphFactory: OutcomeGraphFactory = (options) =>
 
 const asCourseId = (value: string): CourseId => value as CourseId;
 const asOutcomeId = (value: string): LearningOutcomeId => value as LearningOutcomeId;
+
+const GRAPH_TOKEN_FALLBACKS = Object.freeze({
+  primary: '#146ef5',
+  text: '#0f172a',
+  border: '#e2e8f0',
+  borderStrong: '#cbd5e1',
+  textMuted: '#64748b'
+});
 
 const statusLabel = (status: string): string =>
   status.length === 0 ? 'Unknown' : `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
@@ -170,7 +184,7 @@ export const deriveOutcomeGraph = (
       content: Object.freeze([...relatedContent]),
       isRisky: riskLabel.length > 0,
       riskLabel,
-      masteryLabel: 'Not available' as const
+      masteryLabel: 'Not measured' as const
     });
   });
   const edges = visibleOutcomes.flatMap((outcome) =>
@@ -182,6 +196,28 @@ export const deriveOutcomeGraph = (
         target: outcome.id
       }))
   );
+  return Object.freeze({
+    nodes: Object.freeze(nodes),
+    edges: Object.freeze(edges)
+  });
+};
+
+const focusOutcomeGraph = (
+  model: OutcomeGraphModel,
+  selectedOutcomeId: LearningOutcomeId
+): OutcomeGraphModel => {
+  const selected = model.nodes.find((node) => node.id === selectedOutcomeId);
+  if (selected === undefined) {
+    return model;
+  }
+  const focusedIds = new Set<LearningOutcomeId>([
+    selected.id,
+    ...selected.prerequisiteIds,
+    ...selected.dependentIds
+  ]);
+  const nodes = model.nodes.filter((node) => focusedIds.has(node.id));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = model.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
   return Object.freeze({
     nodes: Object.freeze(nodes),
     edges: Object.freeze(edges)
@@ -228,6 +264,7 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly feedbackKind = signal<OutcomeGraphFeedbackKind>(null);
   readonly liveMessage = signal('Loading courses, outcomes, and content.');
   readonly relationDraft = signal<readonly LearningOutcomeId[]>([]);
+  readonly isGraphFocused = signal(false);
 
   readonly filterForm = new FormGroup({
     search: new FormControl('', { nonNullable: true }),
@@ -260,14 +297,20 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
     ...(this.selectedStatus().length > 0 ? { status: this.selectedStatus() as LearningOutcomeStatus } : {})
   }));
   readonly graphModel = computed(() => deriveOutcomeGraph(this.outcomes(), this.courses(), this.content(), this.filters()));
+  readonly renderedGraphModel = computed(() => {
+    const selectedId = this.selectedOutcomeId();
+    return this.isGraphFocused() && selectedId !== null
+      ? focusOutcomeGraph(this.graphModel(), selectedId)
+      : this.graphModel();
+  });
   readonly levels = computed(() => Object.freeze([...new Set(this.outcomes().map((outcome) => outcome.level))].sort((left, right) => left - right)));
   readonly visibleNodes = computed(() => this.graphModel().nodes);
   readonly graphElements = computed<readonly OutcomeGraphElement[]>(() => [
-    ...this.graphModel().nodes.map((node) => ({
+    ...this.renderedGraphModel().nodes.map((node) => ({
       group: 'nodes' as const,
       data: { id: String(node.id), label: `${node.code}\n${node.title}`, status: node.status, level: node.level }
     })),
-    ...this.graphModel().edges.map((edge) => ({
+    ...this.renderedGraphModel().edges.map((edge) => ({
       group: 'edges' as const,
       data: { id: edge.id, source: String(edge.source), target: String(edge.target) }
     }))
@@ -286,6 +329,24 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly riskyNodes = computed(() => this.graphModel().nodes.filter((node) => node.isRisky));
   readonly graphVisible = computed(() => this.viewMode() === 'graph' && !this.isLoading() && !this.isUnauthorized() && !this.isServiceError() && !this.isEmpty());
   readonly canEditRelations = computed(() => !this.isUnauthorized() && this.selectedOutcome() !== undefined && !this.isSaving());
+  readonly recommendedContent = computed<readonly OutcomeGraphRecommendation[]>(() => {
+    const selected = this.selectedOutcome();
+    if (selected === undefined || typeof this.facade.recommendLearningPath !== 'function') {
+      return Object.freeze([]);
+    }
+    const relatedIds = new Set(selected.content.map((item) => item.id));
+    const contentById = new Map(this.content().map((item) => [item.id, item]));
+    const entries = this.facade.recommendLearningPath({
+      courseId: selected.courseId,
+      masteryByOutcomeId: {},
+      completedContentIds: [],
+      lockedContentIds: []
+    });
+    return Object.freeze(entries.flatMap((entry) => {
+      const item = contentById.get(entry.contentItemId);
+      return item !== undefined && relatedIds.has(item.id) ? [Object.freeze({ item, entry })] : [];
+    }));
+  });
   readonly masteryAvailable = signal(false);
   private readonly staleSelectionEffect = effect(() => {
     const selectedId = this.selectedOutcomeId();
@@ -302,6 +363,7 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   private graphRenderQueued = false;
   private syncingFromUrl = false;
   private staleSelectionAnnouncementPending = false;
+  private rawCourseQuery = '';
 
   private readonly graphRenderEffect = effect(() => {
     this.graphElements();
@@ -345,6 +407,7 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
     this.facade.loadCourses().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
         this.coursesLoaded.set(true);
+        this.canonicalizeCourseQuery();
         if (!this.staleSelectionAnnouncementPending) this.liveMessage.set('Courses loaded.');
       },
       error: () => this.liveMessage.set('Courses could not be loaded. Try again.')
@@ -357,7 +420,9 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
       },
       error: () => this.liveMessage.set('Outcomes could not be loaded. Try again.')
     });
-    this.facade.loadContent().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+    this.facade.loadContent({}, {
+      contentAccess: { mode: 'management' } as ContentAccessContext
+    }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
         this.contentLoaded.set(true);
         if (!this.staleSelectionAnnouncementPending) this.liveMessage.set('Content loaded.');
@@ -394,6 +459,7 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
       this.selectedOutcomeId.set(null);
       this.relationDraft.set([]);
       this.prerequisiteControl.setValue([], { emitEvent: false });
+      this.isGraphFocused.set(false);
       this.syncQuery({ selected: null });
       return;
     }
@@ -457,10 +523,23 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
 
   focusSelectedGraph(): void {
     const id = this.selectedOutcomeId();
-    if (this.graph === null || id === null) return;
-    const target = this.graph.getElementById(String(id));
-    target.focus?.();
-    this.graph.fit(target, 80);
+    if (id === null || this.selectedOutcome() === undefined) return;
+    this.isGraphFocused.set(true);
+    this.liveMessage.set('Focused graph shows the selected outcome and its direct prerequisites and dependents.');
+    queueMicrotask(() => {
+      const graph = this.graph;
+      if (graph === null) return;
+      const target = graph.getElementById(String(id));
+      target.focus?.();
+      graph.fit(target, 80);
+    });
+  }
+
+  restoreFullGraph(): void {
+    if (!this.isGraphFocused()) return;
+    this.isGraphFocused.set(false);
+    this.liveMessage.set('Full filtered outcome map restored.');
+    this.fitGraph();
   }
 
   trackById(_index: number, value: { readonly id: string }): string {
@@ -472,7 +551,7 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   masteryLabel(): string {
-    return 'Not available';
+    return 'Not measured';
   }
 
   private applyFilterForm(value: FilterFormValue): void {
@@ -505,10 +584,11 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
     const status = this.queryString(params['status']);
     const view = this.queryString(params['view']);
     const selected = this.queryString(params['selected']);
+    this.rawCourseQuery = course;
     this.syncingFromUrl = true;
     this.filterForm.reset({
       search,
-      courseId: this.courses().some((candidate) => String(candidate.id) === course) ? course : '',
+      courseId: !this.coursesLoaded() || this.courses().some((candidate) => String(candidate.id) === course) ? course : '',
       level: levelValue,
       status: (LIFECYCLE_STATES as readonly string[]).includes(status) ? status : ''
     }, { emitEvent: true });
@@ -519,6 +599,23 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
       this.selectOutcome(null);
     }
     this.syncingFromUrl = false;
+    if (this.coursesLoaded()) this.canonicalizeCourseQuery();
+  }
+
+  private canonicalizeCourseQuery(): void {
+    if (!this.coursesLoaded()) return;
+    const canonicalCourse = this.rawCourseQuery.length > 0 && this.courses().some((candidate) => String(candidate.id) === this.rawCourseQuery)
+      ? this.rawCourseQuery
+      : '';
+    if (this.filterForm.controls.courseId.value !== canonicalCourse) {
+      this.syncingFromUrl = true;
+      this.filterForm.controls.courseId.setValue(canonicalCourse, { emitEvent: true });
+      this.syncingFromUrl = false;
+    }
+    if (canonicalCourse !== this.rawCourseQuery) {
+      this.rawCourseQuery = canonicalCourse;
+      this.syncQuery({ course: canonicalCourse.length > 0 ? canonicalCourse : null });
+    }
   }
 
   private syncQuery(values: Readonly<Record<string, string | null>>): void {
@@ -553,12 +650,23 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
     if (container === undefined) return;
     const elements = this.graphElements();
     if (this.graph === null) {
+      const view = this.document.defaultView;
+      const styles = view?.getComputedStyle(container);
+      const token = (name: string, fallback: string): string => {
+        const value = styles?.getPropertyValue(name).trim() || container.style.getPropertyValue(name).trim();
+        return value.length > 0 ? value : fallback;
+      };
+      const primary = token('--ui-primary', GRAPH_TOKEN_FALLBACKS.primary);
+      const text = token('--ui-text', GRAPH_TOKEN_FALLBACKS.text);
+      const border = token('--ui-border', GRAPH_TOKEN_FALLBACKS.border);
+      const borderStrong = token('--ui-border-strong', GRAPH_TOKEN_FALLBACKS.borderStrong);
+      const textMuted = token('--ui-text-muted', GRAPH_TOKEN_FALLBACKS.textMuted);
       this.graph = this.graphFactory({
         container,
         elements,
         style: [
-          { selector: 'node', style: { label: 'data(label)', 'background-color': '#146ef5', color: '#0f172a', width: 34, height: 34, 'font-size': 8, 'text-wrap': 'wrap', 'text-max-width': 100 } },
-          { selector: 'edge', style: { width: 2, 'line-color': '#94a3b8', 'target-arrow-color': '#64748b', 'target-arrow-shape': 'triangle', curveStyle: 'bezier' } }
+          { selector: 'node', style: { label: 'data(label)', 'background-color': primary, color: text, 'border-color': borderStrong, 'border-width': 1, width: 34, height: 34, 'font-size': 8, 'text-wrap': 'wrap', 'text-max-width': 100 } },
+          { selector: 'edge', style: { width: 2, 'line-color': border, 'target-arrow-color': textMuted, 'target-arrow-shape': 'triangle', curveStyle: 'bezier' } }
         ],
         layout: { name: 'breadthfirst', directed: true, padding: 28, animate: !this.prefersReducedMotion() }
       });

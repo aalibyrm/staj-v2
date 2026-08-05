@@ -225,7 +225,7 @@ const normalizeContentAccessContext = (
   context: ContentAccessContext | undefined
 ): NormalizedContentAccessContext => {
   if (context === undefined) {
-    return undefined;
+    return null;
   }
   if (!isRecord(context) || (context.mode !== 'consume' && context.mode !== 'management')) {
     return null;
@@ -259,10 +259,11 @@ const isContentAccessible = (
   content: ContentItem,
   context: NormalizedContentAccessContext
 ): boolean => {
-  if (context === undefined || context?.mode === 'management') {
+  if (context?.mode === 'management') {
     return true;
   }
   if (
+    context === undefined ||
     context === null ||
     context.mode !== 'consume' ||
     context.authenticated !== true ||
@@ -847,6 +848,7 @@ export class LearningDomainRepository {
         if (this.outcomeEntities.has(id)) {
           throw this.conflict('outcome', id, 'A learning outcome with this ID already exists.');
         }
+        this.validateOutcomeCodeUniqueness(id, normalized.courseId, normalized.code);
         this.assertOutcomePrerequisiteGraphIsAcyclic(normalized);
         this.outcomeEntities.set(id, normalized);
         const course = this.courseEntities.get(normalized.courseId);
@@ -898,7 +900,7 @@ export class LearningDomainRepository {
           ...current,
           ...patch,
           courseId,
-          code: patch.code ?? current.code,
+          code: patch.code === undefined ? current.code : assertNonEmptyString(patch.code, 'Learning outcome code'),
           title: patch.title ?? current.title,
           description: patch.description ?? current.description,
           level: patch.level ?? current.level,
@@ -907,6 +909,7 @@ export class LearningDomainRepository {
           updatedAt: now(),
           version: current.version + 1
         });
+        this.validateOutcomeCodeUniqueness(id, courseId, next.code);
         this.assertOutcomePrerequisiteGraphIsAcyclic(next);
         this.outcomeEntities.set(id, next);
         if (courseId !== current.courseId) {
@@ -992,15 +995,19 @@ export class LearningDomainRepository {
   }
 
   getContent(id: ContentItemId, options?: LearningDomainOperationOptions): Observable<ContentItem> {
-    return defer(() =>
-      this.execute('GET', `/learning-domain/content/${id}`, undefined, () => {
+    return defer(() => {
+      const accessContext = normalizeContentAccessContext(options?.contentAccess);
+      return this.execute('GET', `/learning-domain/content/${id}`, undefined, () => {
         const content = this.contentEntities.get(id);
         if (content === undefined) {
           throw this.notFound('content', id);
         }
+        if (!isContentAccessible(content, accessContext)) {
+          throw new LearningDomainError('unauthorized', 'Content access is not authorized.', 'content');
+        }
         return cloneContentItem(content);
-      }, options)
-    );
+      }, options);
+    });
   }
 
   getContentItem(id: ContentItemId, options?: LearningDomainOperationOptions): Observable<ContentItem> {
@@ -1545,6 +1552,28 @@ export class LearningDomainRepository {
       if (prerequisite.courseId !== courseId) {
         throw this.invalidReference('outcome', undefined, 'outcome', prerequisiteOutcomeId, 'The prerequisite belongs to another course.');
       }
+    }
+  }
+
+  private validateOutcomeCodeUniqueness(
+    outcomeId: LearningOutcomeId,
+    courseId: CourseId,
+    code: string
+  ): void {
+    const normalizedCode = code.trim().toLowerCase();
+    const duplicate = [...this.outcomeEntities.values()].find(
+      (outcome) =>
+        outcome.id !== outcomeId &&
+        outcome.courseId === courseId &&
+        outcome.code.trim().toLowerCase() === normalizedCode
+    );
+    if (duplicate !== undefined) {
+      throw new LearningDomainError(
+        'validation',
+        `Learning outcome code "${code.trim()}" is already used in this course.`,
+        'outcome',
+        outcomeId
+      );
     }
   }
 

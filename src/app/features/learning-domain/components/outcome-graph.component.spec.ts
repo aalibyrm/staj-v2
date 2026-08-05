@@ -17,13 +17,16 @@ import {
   type Course,
   type CourseId,
   type LearningOutcome,
-  type LearningOutcomeId
+  type LearningOutcomeId,
+  type LearningPathEntry,
+  type LearningPathRecommendationInput
 } from '../models/learning-domain.models';
 import { type LearningDomainRequestState, type LearningDomainResource } from '../state/learning-domain.store';
 
 const courseId = 'course-1' as CourseId;
 const firstId = 'outcome-1' as LearningOutcomeId;
 const secondId = 'outcome-2' as LearningOutcomeId;
+const thirdId = 'outcome-3' as LearningOutcomeId;
 const contentId = 'content-1' as ContentItemId;
 
 const course: Course = {
@@ -59,6 +62,13 @@ const second: LearningOutcome = {
   code: 'SCI-1.2',
   title: 'Analyze matter',
   prerequisiteOutcomeIds: [firstId]
+};
+
+const third: LearningOutcome = {
+  ...first,
+  id: thirdId,
+  code: 'SCI-1.3',
+  title: 'Apply matter'
 };
 
 const content: ContentItem = {
@@ -97,6 +107,7 @@ class TestFacade {
   readonly loadCourses = vi.fn(() => { this.requestStates.update((value) => ({ ...value, courses: requestState('success') })); return of([course]); });
   readonly loadOutcomes = vi.fn(() => { this.requestStates.update((value) => ({ ...value, outcomes: requestState('success') })); return of([first, second]); });
   readonly loadContent = vi.fn(() => { this.requestStates.update((value) => ({ ...value, content: requestState('success') })); return of([content]); });
+  readonly recommendLearningPath = vi.fn((_input: LearningPathRecommendationInput): readonly LearningPathEntry[] => []);
   readonly setOutcomeFilter = vi.fn();
   readonly updateOutcome = vi.fn((id: LearningOutcomeId, input: { prerequisiteOutcomeIds?: readonly LearningOutcomeId[] }, options?: { expectedVersion?: number }) => {
     void options;
@@ -107,7 +118,6 @@ class TestFacade {
     return of(updated);
   });
 }
-
 const graphFactory = (): OutcomeGraphCore => {
   let zoom = 1;
   const listeners: Array<(event: { target: { id(): string } }) => void> = [];
@@ -159,7 +169,7 @@ describe('OutcomeGraphComponent', () => {
     expect(model.nodes[1]?.prerequisiteCount).toBe(1);
     expect(model.nodes[1]?.affectedCount).toBe(0);
     expect(model.nodes[1]?.content).toEqual([content]);
-    expect(model.nodes[1]?.masteryLabel).toBe('Not available');
+    expect(model.nodes[1]?.masteryLabel).toBe('Not measured');
   });
 
   it('loads all learning-domain resources and renders the accessible relation list', () => {
@@ -224,6 +234,60 @@ describe('OutcomeGraphComponent', () => {
     expect(component.feedbackMessage()).toContain('Cycle detected');
   });
 
+  it('focuses the rendered graph to the selected one-hop neighborhood and restores the full filtered graph', () => {
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    facade.courses.set([{ ...course, learningOutcomeIds: [...course.learningOutcomeIds, thirdId] }]);
+    facade.outcomes.set([first, second, third]);
+
+    const fullGraph = component.graphElements();
+    expect(fullGraph.filter((element) => element.group === 'nodes').map((element) => element.data['id'])).toEqual([
+      String(firstId), String(secondId), String(thirdId)
+    ]);
+
+    component.selectOutcome(secondId);
+    component.focusSelectedGraph();
+    const focusedGraph = component.graphElements();
+    expect(component.isGraphFocused()).toBe(true);
+    expect(focusedGraph.filter((element) => element.group === 'nodes').map((element) => element.data['id'])).toEqual([
+      String(firstId), String(secondId)
+    ]);
+    expect(focusedGraph.filter((element) => element.group === 'edges').map((element) => element.data['id'])).toEqual([
+      `${firstId}->${secondId}`
+    ]);
+
+    component.restoreFullGraph();
+    expect(component.isGraphFocused()).toBe(false);
+    expect(component.graphElements()).toEqual(fullGraph);
+  });
+
+  it('computes selected inspector recommendations from facade entries and preserves their reason', () => {
+    const recommendation: LearningPathEntry = {
+      id: 'path-entry-1' as LearningPathEntry['id'],
+      order: 1,
+      contentItemId: contentId,
+      reason: 'Review matter before moving forward.',
+      isCompleted: false,
+      isLocked: false
+    };
+    facade.recommendLearningPath.mockReturnValue([recommendation]);
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    component.selectOutcome(secondId);
+
+    const selectedRecommendations = component.recommendedContent();
+
+    expect(facade.recommendLearningPath).toHaveBeenCalledWith({
+      courseId,
+      masteryByOutcomeId: {},
+      completedContentIds: [],
+      lockedContentIds: []
+    });
+    expect(selectedRecommendations).toEqual([{ item: content, entry: recommendation }]);
+    expect(selectedRecommendations[0]?.entry.reason).toBe(recommendation.reason);
+  });
   it('uses a real graph control seam and honors zoom, fit, focus, and destroy lifecycle calls', async () => {
     const fixture = TestBed.createComponent(OutcomeGraphComponent);
     fixture.detectChanges();

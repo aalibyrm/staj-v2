@@ -94,6 +94,39 @@ describe('LearningDomainRepository', () => {
     expect(updated.version).toBe(current.version + 1);
   });
 
+  it('rejects trimmed case-insensitive duplicate outcome codes before create or update mutation', async () => {
+    const repository = new LearningDomainRepository(new MockTransport());
+    const beforeCreate = repository.getSnapshot();
+    await expect(firstValueFrom(repository.createOutcome({
+      id: 'outcome-duplicate-create' as LearningOutcomeId,
+      courseId: 'course-foundations' as CourseId,
+      code: '  out-101  ',
+      title: 'Duplicate create'
+    }))).rejects.toMatchObject({
+      code: 'validation',
+      message: 'Learning outcome code "out-101" is already used in this course.'
+    });
+    expect(repository.getSnapshot()).toEqual(beforeCreate);
+
+    const beforeUpdate = repository.getSnapshot();
+    await expect(firstValueFrom(repository.updateOutcome('outcome-foundations-analysis' as LearningOutcomeId, {
+      code: '  out-101  '
+    }))).rejects.toMatchObject({
+      code: 'validation',
+      message: 'Learning outcome code "out-101" is already used in this course.'
+    });
+    expect(repository.getSnapshot()).toEqual(beforeUpdate);
+  });
+
+  it('allows an outcome to keep its own code during update', async () => {
+    const repository = new LearningDomainRepository(new MockTransport());
+    const current = repository.getSnapshot().outcomes.find((outcome) => outcome.id === 'outcome-foundations-models');
+    if (current === undefined) throw new Error('Expected seeded models outcome.');
+    const updated = await firstValueFrom(repository.updateOutcome(current.id, { code: `  ${current.code}  ` }));
+    expect(updated.code).toBe(current.code);
+    expect(updated.version).toBe(current.version + 1);
+  });
+
   it('allows public content for authenticated consume context and denies anonymous access', async () => {
     const repository = new LearningDomainRepository(new MockTransport());
     const publicItem = await firstValueFrom(repository.listContent({}, { contentAccess: access() }));
@@ -134,13 +167,26 @@ describe('LearningDomainRepository', () => {
     expect(await firstValueFrom(repository.listContent({}, { contentAccess: access({ referenceTime: 'invalid' }) }))).toEqual([]);
   });
 
-  it('fails closed for missing or invalid consume context while explicit management remains auditable', async () => {
+  it('fails closed for missing or invalid content context on lists and direct reads while management remains explicit', async () => {
     const repository = new LearningDomainRepository(new MockTransport());
+    expect(await firstValueFrom(repository.listContent())).toEqual([]);
     expect(await firstValueFrom(repository.listContent({}, { contentAccess: { mode: 'consume' } as ContentAccessContext }))).toEqual([]);
     expect(await firstValueFrom(repository.listContent({}, { contentAccess: { mode: 'consume', authenticated: true, enrolledCourseIds: [], completedOutcomeIds: [], roleCodes: [], referenceTime: 'not-iso' } }))).toEqual([]);
+
+    const denied = await firstValueFrom(repository.getContent('content-foundations-models' as ContentItemId)).catch((error: unknown) => error);
+    expect(denied).toBeInstanceOf(LearningDomainError);
+    expect(denied).toMatchObject({ code: 'unauthorized', entity: 'content' });
+    expect((denied as LearningDomainError).id).toBeUndefined();
+    expect((denied as LearningDomainError).message).not.toContain('content-foundations-models');
+    await expect(firstValueFrom(repository.getContentItem('content-foundations-models' as ContentItemId, { contentAccess: access({ authenticated: false }) }))).rejects.toMatchObject({ code: 'unauthorized', entity: 'content' });
+
     const managed = await firstValueFrom(repository.listContent({}, { contentAccess: { mode: 'management' } as ContentAccessContext }));
     expect(managed).toHaveLength(5);
     expect(managed.find((item) => item.id === 'content-application-build')?.accessConditions.visibility).toBe('restricted');
+    const managedRead = await firstValueFrom(repository.getContent('content-application-build' as ContentItemId, { contentAccess: { mode: 'management' } as ContentAccessContext }));
+    expect(managedRead.id).toBe('content-application-build');
+    const consumedRead = await firstValueFrom(repository.getContentItem('content-foundations-models' as ContentItemId, { contentAccess: access() }));
+    expect(consumedRead.id).toBe('content-foundations-models');
   });
 
   it('composes access filtering with server-like filters and stable sorting', async () => {
