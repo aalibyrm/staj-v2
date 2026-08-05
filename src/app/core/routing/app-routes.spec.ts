@@ -15,6 +15,7 @@ import { UnauthorizedPageComponent } from '../../shared/components/unauthorized-
 import { RoutePlaceholderComponent } from '../../shared/components/route-placeholder.component';
 import { OutcomeListEditorComponent } from '../../features/learning-domain/components/outcome-list-editor.component';
 import { OutcomeGraphComponent } from '../../features/learning-domain/components/outcome-graph.component';
+import { CourseContentCatalogComponent } from '../../features/learning-domain/components/course-content-catalog.component';
 import { adaptiveLearningRoutes } from '../../features/adaptive-learning/adaptive-learning.routes';
 
 @Component({
@@ -32,8 +33,7 @@ const accountIdFor = (role: RoleCode): string => {
 };
 
 const concreteRoutes: ReadonlyArray<readonly [string, string, RoleCode]> = [
-  ['/learning/dashboard', 'Learning dashboard', 'STUDENT'],
-  ['/courses', 'Courses', 'STUDENT'],
+  ['/courses', 'Course catalog', 'STUDENT'],
   ['/courses/course-42/path', 'Course path', 'STUDENT'],
   ['/outcomes', 'Outcomes', 'PROGRAM_MANAGER'],
   ['/outcomes/map', 'Outcomes map', 'PROGRAM_MANAGER'],
@@ -145,7 +145,7 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], main[aria-labelledby="catalog-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
@@ -175,6 +175,30 @@ describe('application routes', () => {
       ROUTE_CAPABILITIES.programWorkspace
     ]);
     expect(await mapRoute?.loadComponent?.()).toBe(OutcomeGraphComponent);
+  });
+  it('lazy-loads the courses catalog and preserves the guarded course path placeholder', async () => {
+    const coursesRoute = adaptiveLearningRoutes.find((route) => route.path === 'courses');
+    const pathRoute = adaptiveLearningRoutes.find((route) => route.path === 'courses/:id/path');
+
+    expect(coursesRoute?.pathMatch).toBe('full');
+    expect(coursesRoute?.canMatch).toContain(authGuard);
+    expect(coursesRoute?.component).toBeUndefined();
+    expect(coursesRoute?.data?.['title']).toBe('Courses');
+    expect(coursesRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.studentLearning,
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.programWorkspace
+    ]);
+    expect(await coursesRoute?.loadComponent?.()).toBe(CourseContentCatalogComponent);
+
+    expect(pathRoute?.path).toBe('courses/:id/path');
+    expect(pathRoute?.canMatch).toContain(authGuard);
+    expect(pathRoute?.data?.['title']).toBe('Course path');
+    expect(pathRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.studentLearning,
+      ROUTE_CAPABILITIES.instructorTeaching
+    ]);
+    expect(await pathRoute?.loadComponent?.()).toBe(RoutePlaceholderComponent);
   });
 
   it('keeps the dashboard reachable for every canonical role', async () => {

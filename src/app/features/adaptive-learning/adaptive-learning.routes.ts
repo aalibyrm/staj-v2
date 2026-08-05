@@ -19,6 +19,10 @@ const loadOutcomeGraph = () =>
   import('../learning-domain/components/outcome-graph.component').then(
     ({ OutcomeGraphComponent }) => OutcomeGraphComponent
   );
+const loadCourseContentCatalog = () =>
+  import('../learning-domain/components/course-content-catalog.component').then(
+    ({ CourseContentCatalogComponent }) => CourseContentCatalogComponent
+  );
 
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
@@ -58,11 +62,20 @@ export const adaptiveLearningRoutes: Routes = [
     },
     loadComponent: loadDataScopeDashboard
   },
-  placeholderRoute('courses', 'Courses', [
-    ROUTE_CAPABILITIES.studentLearning,
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.programWorkspace
-  ]),
+  {
+    path: 'courses',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Courses',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.studentLearning,
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.programWorkspace
+      ]
+    },
+    loadComponent: loadCourseContentCatalog
+  },
   placeholderRoute('courses/:id/path', 'Course path', [
     ROUTE_CAPABILITIES.studentLearning,
     ROUTE_CAPABILITIES.instructorTeaching

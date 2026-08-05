@@ -77,8 +77,20 @@ export class LearningDomainError extends Error {
   }
 }
 
+export type ContentAccessMode = 'consume' | 'management';
+
+export interface ContentAccessContext {
+  readonly mode: ContentAccessMode;
+  readonly authenticated: boolean;
+  readonly enrolledCourseIds: readonly CourseId[];
+  readonly completedOutcomeIds: readonly LearningOutcomeId[];
+  readonly roleCodes: readonly string[];
+  readonly referenceTime: string;
+}
+
 export interface LearningDomainOperationOptions extends Partial<MockScenarioControls> {
   readonly expectedVersion?: number;
+  readonly contentAccess?: ContentAccessContext;
 }
 
 export type LearningDomainRequestOptions = LearningDomainOperationOptions;
@@ -194,6 +206,106 @@ const cloneAccess = (value: ContentAccessConditions | undefined): ContentAccessC
     availableFrom: source.availableFrom,
     availableUntil: source.availableUntil
   });
+};
+const isIsoDate = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+  Number.isFinite(Date.parse(value));
+
+type NormalizedContentAccessContext = Readonly<{
+  readonly mode: ContentAccessMode;
+  readonly authenticated?: boolean;
+  readonly enrolledCourseIds?: readonly string[];
+  readonly completedOutcomeIds?: readonly string[];
+  readonly roleCodes?: readonly string[];
+  readonly referenceTime?: string;
+}> | null | undefined;
+
+const normalizeContentAccessContext = (
+  context: ContentAccessContext | undefined
+): NormalizedContentAccessContext => {
+  if (context === undefined) {
+    return undefined;
+  }
+  if (!isRecord(context) || (context.mode !== 'consume' && context.mode !== 'management')) {
+    return null;
+  }
+  if (context.mode === 'management') {
+    return Object.freeze({ mode: 'management' });
+  }
+  if (
+    typeof context.authenticated !== 'boolean' ||
+    !Array.isArray(context.enrolledCourseIds) ||
+    !Array.isArray(context.completedOutcomeIds) ||
+    !Array.isArray(context.roleCodes) ||
+    !context.enrolledCourseIds.every((value) => typeof value === 'string') ||
+    !context.completedOutcomeIds.every((value) => typeof value === 'string') ||
+    !context.roleCodes.every((value) => typeof value === 'string') ||
+    !isIsoDate(context.referenceTime)
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    mode: 'consume',
+    authenticated: context.authenticated,
+    enrolledCourseIds: immutableArray(context.enrolledCourseIds),
+    completedOutcomeIds: immutableArray(context.completedOutcomeIds),
+    roleCodes: immutableArray(context.roleCodes),
+    referenceTime: context.referenceTime
+  });
+};
+
+const isContentAccessible = (
+  content: ContentItem,
+  context: NormalizedContentAccessContext
+): boolean => {
+  if (context === undefined || context?.mode === 'management') {
+    return true;
+  }
+  if (
+    context === null ||
+    context.mode !== 'consume' ||
+    context.authenticated !== true ||
+    context.enrolledCourseIds === undefined ||
+    context.completedOutcomeIds === undefined ||
+    context.roleCodes === undefined ||
+    context.referenceTime === undefined
+  ) {
+    return false;
+  }
+
+  const conditions = content.accessConditions;
+  const enrolled = context.enrolledCourseIds.includes(content.courseId);
+  const requiresEnrollment =
+    conditions.visibility === 'enrolled' || conditions.requiresEnrollment === true;
+  if (requiresEnrollment && !enrolled) {
+    return false;
+  }
+  if (
+    conditions.visibility === 'restricted' &&
+    (conditions.requiredRoleCodes?.length ?? 0) > 0 &&
+    !conditions.requiredRoleCodes?.some((roleCode) => context.roleCodes?.includes(roleCode))
+  ) {
+    return false;
+  }
+  const completedOutcomes = new Set(context.completedOutcomeIds);
+  if (!(conditions.requiredOutcomeIds ?? []).every((outcomeId) => completedOutcomes.has(outcomeId))) {
+    return false;
+  }
+  const referenceTimestamp = Date.parse(context.referenceTime);
+  if (conditions.availableFrom !== undefined) {
+    if (!isIsoDate(conditions.availableFrom) || referenceTimestamp < Date.parse(conditions.availableFrom)) {
+      return false;
+    }
+  }
+  if (conditions.availableUntil !== undefined) {
+    if (!isIsoDate(conditions.availableUntil) || referenceTimestamp > Date.parse(conditions.availableUntil)) {
+      return false;
+    }
+  }
+  return conditions.visibility === 'public'
+    ? conditions.requiresEnrollment !== true || enrolled
+    : true;
 };
 
 const cloneReason = (value: LearningPathReason | undefined): LearningPathReason | undefined =>
@@ -860,9 +972,11 @@ export class LearningDomainRepository {
   ): Observable<readonly ContentItem[]> {
     return defer(() => {
       const normalized = this.normalizeContentFilter(filter);
+      const accessContext = normalizeContentAccessContext(options?.contentAccess);
       return this.execute('GET', '/learning-domain/content', normalized, () => {
         const results = [...this.contentEntities.values()]
           .filter((content) => this.matchesContent(content, normalized))
+          .filter((content) => isContentAccessible(content, accessContext))
           .sort((left, right) => this.compareContent(left, right, normalized))
           .map(cloneContentItem);
         return Object.freeze(results);
@@ -1139,7 +1253,7 @@ export class LearningDomainRepository {
     if (options === undefined) {
       return { ...this.scenarioControls };
     }
-    const { expectedVersion: _expectedVersion, ...controls } = options;
+    const { expectedVersion: _expectedVersion, contentAccess: _contentAccess, ...controls } = options;
     return { ...this.scenarioControls, ...controls };
   }
 

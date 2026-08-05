@@ -1,0 +1,191 @@
+<main class="catalog" [attr.aria-busy]="isLoading()" aria-labelledby="catalog-heading">
+  <header class="page-heading">
+    <div>
+      <span class="eyebrow">Courses and content</span>
+      <h1 id="catalog-heading">Course catalog</h1>
+      <p>Browse course metadata and content that is available in your current access scope.</p>
+    </div>
+    <span class="view-chip" [attr.aria-label]="viewLabel()">{{ viewLabel() }}</span>
+  </header>
+
+  <p class="sr-only" role="status" aria-live="polite">{{ liveMessage() }}</p>
+
+  @if (isUnauthorized()) {
+    <section class="state-card state-card--unauthorized" role="alert" aria-live="assertive">
+      <span class="state-symbol" aria-hidden="true">!</span>
+      <div>
+        <h2>Catalog access unavailable</h2>
+        <p>Sign in with an allowed learning, teaching, or program-management role. No content rows are shown.</p>
+      </div>
+    </section>
+  } @else if (isLoading()) {
+    <section class="state-card" aria-live="polite">
+      <div class="skeleton skeleton--heading" aria-hidden="true"></div>
+      <div class="skeleton-grid" aria-hidden="true">
+        <div class="skeleton skeleton--card"></div>
+        <div class="skeleton skeleton--card"></div>
+        <div class="skeleton skeleton--card"></div>
+      </div>
+      <div class="skeleton skeleton--table" aria-hidden="true"></div>
+      <p>Loading courses, outcomes, and content.</p>
+    </section>
+  } @else if (isServiceError()) {
+    <section class="state-card state-card--error" role="alert" aria-live="assertive">
+      <span class="state-symbol" aria-hidden="true">!</span>
+      <div>
+        <h2>Catalog could not be loaded</h2>
+        <p>A temporary service problem prevented the catalog from loading. Your filters will be preserved.</p>
+        <button class="button button--primary" type="button" (click)="retryLoad()">Retry</button>
+      </div>
+    </section>
+  } @else {
+    <section class="access-context" aria-label="Access context">
+      <strong>{{ viewLabel() }}</strong>
+      <span>{{ accessContextLabel() }}</span>
+    </section>
+
+    <section class="course-section" aria-labelledby="course-heading">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">Learning scope</span>
+          <h2 id="course-heading">Courses</h2>
+        </div>
+        <span class="result-count">{{ courses().length }} courses</span>
+      </div>
+      @if (courses().length === 0) {
+        <p class="inline-empty">No courses are available in this scope.</p>
+      } @else {
+        <div class="course-grid">
+          @for (course of courses(); track course.id) {
+            <article class="course-card">
+              <span class="course-code">{{ course.code }}</span>
+              <h3>{{ course.title }}</h3>
+              <p>{{ course.description }}</p>
+              <span class="status-chip">Status: {{ statusLabel(course.status) }}</span>
+            </article>
+          }
+        </div>
+      }
+    </section>
+
+    <form class="filter-panel" [formGroup]="filterForm" (submit)="$event.preventDefault()" aria-labelledby="filter-heading">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">Server-filtered catalog</span>
+          <h2 id="filter-heading">Find content</h2>
+        </div>
+        <button class="button button--secondary" type="button" (click)="resetFilters()">Clear filters</button>
+      </div>
+      <div class="filter-grid">
+        <div class="field field--search">
+          <label for="catalog-search">Search title or description</label>
+          <input id="catalog-search" type="search" formControlName="search" maxlength="120" autocomplete="off" placeholder="Search content" />
+        </div>
+        <div class="field">
+          <label for="catalog-course">Course</label>
+          <select id="catalog-course" formControlName="courseId">
+            <option value="">All courses</option>
+            @for (course of courses(); track course.id) {
+              <option [value]="course.id">{{ course.code }} · {{ course.title }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="catalog-level">Level</label>
+          <input id="catalog-level" type="number" min="0" step="1" formControlName="level" />
+        </div>
+        <div class="field">
+          <label for="catalog-format">Format</label>
+          <select id="catalog-format" formControlName="format">
+            <option value="">All formats</option>
+            @for (format of contentFormats; track format) {
+              <option [value]="format">{{ formatLabel(format) }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="catalog-status">Lifecycle status</label>
+          <select id="catalog-status" formControlName="status">
+            <option value="">All statuses</option>
+            @for (status of lifecycleStates; track status) {
+              <option [value]="status">{{ statusLabel(status) }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="catalog-sort">Sort by</label>
+          <select id="catalog-sort" formControlName="sortBy">
+            <option value="title">Title</option>
+            <option value="level">Level</option>
+            <option value="durationMinutes">Duration</option>
+            <option value="format">Format</option>
+            <option value="status">Status</option>
+            <option value="updatedAt">Updated</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="catalog-direction">Direction</label>
+          <select id="catalog-direction" formControlName="sortDirection">
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+      </div>
+      <p class="filter-note" role="status" aria-live="polite">Changing a filter requests a new server-filtered catalog.</p>
+    </form>
+
+    <section class="content-section" aria-labelledby="content-heading">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">Access-controlled results</span>
+          <h2 id="content-heading">Content</h2>
+        </div>
+        <span class="result-count">{{ content().length }} returned</span>
+      </div>
+      @if (content().length === 0) {
+        <div class="empty-card" role="status" aria-live="polite">
+          <h3>{{ emptyTitle() }}</h3>
+          <p>{{ emptyMessage() }}</p>
+        </div>
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Content catalog metadata and access conditions</caption>
+            <thead>
+              <tr>
+                <th scope="col">Content</th>
+                <th scope="col">Related outcomes</th>
+                <th scope="col">Learning details</th>
+                <th scope="col">Access conditions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (item of renderedContent(); track item.id) {
+                <tr>
+                  <th scope="row">
+                    <strong>{{ item.title }}</strong>
+                    <span class="cell-secondary">{{ courseContext(item.courseId) }}</span>
+                  </th>
+                  <td>{{ relatedOutcomeCodes(item) }}</td>
+                  <td>
+                    <span class="metadata-chip">Level {{ item.level }}</span>
+                    <span class="metadata-chip">{{ item.durationMinutes }} minutes</span>
+                    <span class="metadata-chip">Format: {{ formatLabel(item.format) }}</span>
+                    <span class="status-chip">Status: {{ statusLabel(item.status) }}</span>
+                  </td>
+                  <td><span class="access-chip">{{ accessSummary(item) }}</span></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="result-footer">
+          <span>Showing {{ renderedContent().length }} of {{ content().length }} returned rows.</span>
+          @if (hasMoreContent()) {
+            <button class="button button--secondary" type="button" (click)="showMore()">Show next {{ pageSize }}</button>
+          }
+        </div>
+      }
+    </section>
+  }
+</main>
