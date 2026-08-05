@@ -1,13 +1,13 @@
 # Compact Handoff
 
 - Repository state: `origin -> https://github.com/aalibyrm/staj-v2.git`; branch `main`; tracking `origin/main`
-- Architecture: guarded lazy question-bank routing now feeds a role-scoped repository/facade; immutable typed question entities are derived from canonical course/outcome seed references, with normalized server-like query, status counts, bounded pagination, and stale-request cancellation.
-- UI direction: `/question-bank` provides the assigned read-only P03-W01 list slice: URL-stable search/filter/sort/page/selection, status counts, semantic table selection, request states, and a type-aware inspector; the P03-W02 editor/version dialog remains intentionally out of scope.
+- Architecture: role/course-scoped QuestionBankRepository now owns immutable list/read/create/update data behind MockTransport; draft/review writes validate normalized common and type-specific payloads, preserve snapshots on failure, and reject stale expected versions or non-editable published/archived entities.
+- UI direction: `/question-bank` now integrates a typed QuestionEditor for new and draft/review items with six answer-control families, course-filtered outcomes, accessible validation/focus, live preview, retry/conflict feedback, and immediate saved selection; publish/new-version creation remains P03-W03.
 - Active phase: Phase 03 in progress
 - Active packet: none
-- Verified evidence: P03-W01 focused suite passed 21 tests; full suite passed 150 tests; production build passed; `/question-bank` passed 1440x900 and 900x1000 browser gates with 10 bounded rows, pagination, selection deep-link/inspector behavior, no horizontal overflow, and no runtime console warning/error.
-- Open decisions: none for P03-W01; ADR-007 remains realized as direct `cytoscape@3.34.0`
+- Verified evidence: P03-W02 focused suite passed 17 tests; full suite passed 156 tests; production build passed; browser gates at 1440x900 and 900x1000 exercised validation focus/ARIA wiring, matching-to-essay switching, essay create, draft rehydration/update, published preview-only behavior, URL selection, and zero horizontal overflow/runtime console errors.
+- Open decisions: none for P03-W02; ADR-007 remains realized as direct `cytoscape@3.34.0`
 - Known blocker: none; build retains non-fatal component-style budget warnings for `CourseContentCatalogComponent` (5.37 kB), `OutcomeGraphComponent` (7.54 kB), `OutcomeListEditorComponent` (5.71 kB), `QuestionBankComponent` (5.77 kB), and `AppShellComponent` (7.55 kB)
-- Next: implement and verify `P03-W02`; do not begin `P03-W03`
+- Next: implement and verify `P03-W03`; do not begin `P03-W04`
 
 Maximum target size: 30 lines. Replace stale facts.

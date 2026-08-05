@@ -115,6 +115,44 @@ describe('QuestionBankFacade', () => {
     subscription.unsubscribe();
   });
 });
+  it('creates and updates immutable draft data, preserves failed snapshots, and rejects published writes', async () => {
+    const repository = new QuestionBankRepository(new MockTransport());
+    const session = signedIn('INSTRUCTOR').session();
+    const before = repository.getSnapshot();
+    const accessible = (await firstValueFrom(repository.listQuestions({ pageSize: 50 }, { session }))).items[0];
+    if (accessible === undefined) throw new Error('Expected an accessible seeded question.');
+    const input = {
+      courseId: accessible.courseId,
+      outcomeId: accessible.outcomeId,
+      title: '  New normalized question  ',
+      stem: '  Which response is supported?  ',
+      explanation: '  The evidence supports the selected response.  ',
+      tags: [' evidence ', 'Evidence'],
+      difficulty: 'easy' as const,
+      points: 2,
+      grade: 'foundation' as const,
+      type: 'single-choice' as const,
+      options: [{ id: 'a', label: '  Supported  ' }, { id: 'b', label: 'Other' }],
+      answer: { kind: 'choice' as const, optionIds: ['a'] },
+      status: 'draft' as const
+    };
+    const created = await firstValueFrom(repository.createQuestion(input, { session }));
+    expect(created.id).toContain('-NEW-');
+    expect(Object.isFrozen(created)).toBe(true);
+    expect(created.title).toBe('New normalized question');
+    expect(created.tags).toEqual(['evidence']);
+    expect(repository.getSnapshot().questions).toHaveLength(before.questions.length + 1);
+    const updated = await firstValueFrom(repository.updateQuestion(created.id, { title: 'Updated title' }, { session, expectedVersion: created.version }));
+    expect(updated.version).toBe(created.version + 1);
+    const failedBefore = repository.getSnapshot();
+    repository.setMockScenario({ outcome: 'service-error' });
+    await expect(firstValueFrom(repository.updateQuestion(created.id, { title: 'Unsaved' }, { session, expectedVersion: updated.version }))).rejects.toMatchObject({ kind: 'service' });
+    expect(repository.getSnapshot()).toEqual(failedBefore);
+    repository.resetMockScenario();
+    const published = (await firstValueFrom(repository.listQuestions({ status: 'published', pageSize: 50 }, { session }))).items[0];
+    if (published === undefined) throw new Error('Expected a published question.');
+    await expect(firstValueFrom(repository.updateQuestion(published.id, { title: 'Forbidden' }, { session, expectedVersion: published.version }))).rejects.toMatchObject({ code: 'not-editable' });
+  });
 const testQuestion: Question = {
   id: asQuestionId('QUESTION-TEST-101-001'),
   createdAt: '2025-01-01T00:00:00.000Z',

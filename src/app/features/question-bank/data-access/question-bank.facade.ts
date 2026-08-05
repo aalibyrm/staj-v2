@@ -34,6 +34,8 @@ import {
   QUESTION_SORTS,
   QUESTION_STATUSES,
   QUESTION_TYPES,
+  asCourseId,
+  asLearningOutcomeId,
   asQuestionId,
   isQuestionSort,
   questionReferenceFromCourse,
@@ -42,16 +44,20 @@ import {
   type QuestionAnswer,
   type QuestionBankRequestState,
   type QuestionCourseReference,
+  type QuestionCreateInput,
   type QuestionDifficulty,
+  type QuestionEditorReferenceData,
   type QuestionId,
   type QuestionListQuery,
   type QuestionListQueryInput,
   type QuestionListResponse,
   type QuestionOption,
+  type QuestionOutcomeReference,
   type QuestionSort,
   type QuestionStatus,
   type QuestionStatusCounts,
-  type QuestionType
+  type QuestionType,
+  type QuestionUpdateInput
 } from '../models/question.models';
 
 const AUTHORIZED_QUESTION_ROLES = Object.freeze(['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const);
@@ -76,19 +82,42 @@ export interface QuestionBankAccessContext {
 export interface QuestionBankRequestOptions extends Partial<MockScenarioControls> {
   readonly session?: AuthSession | null;
   readonly access?: QuestionBankAccessContext | null;
+  readonly expectedVersion?: number;
 }
 
-export type QuestionBankErrorCode = 'not-found' | 'unauthorized';
+export type QuestionBankErrorCode =
+  | 'not-found'
+  | 'unauthorized'
+  | 'validation'
+  | 'conflict'
+  | 'not-editable';
 
 export class QuestionBankError extends Error {
   override readonly name = 'QuestionBankError';
 
   constructor(
     readonly code: QuestionBankErrorCode,
-    message: string
+    message: string,
+    readonly id?: string
   ) {
     super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
   }
+}
+
+export type QuestionBankSaveStatus =
+  | 'idle'
+  | 'saving'
+  | 'success'
+  | 'error'
+  | 'unauthorized'
+  | 'conflict';
+
+export interface QuestionBankSaveRequestState {
+  readonly status: QuestionBankSaveStatus;
+  readonly message?: string;
+  readonly questionId?: QuestionId;
+  readonly retryable?: boolean;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -364,6 +393,7 @@ const createQuestionSeed = (
 const createQuestionSeedData = (): Readonly<{
   readonly questions: readonly Question[];
   readonly courses: readonly QuestionCourseReference[];
+  readonly outcomes: readonly SeedLearningOutcome[];
 }> => {
   const seed = createSeedData();
   const questions: Question[] = [];
@@ -381,7 +411,11 @@ const createQuestionSeedData = (): Readonly<{
   });
   return deepFreeze({
     questions: Object.freeze(questions),
-    courses: Object.freeze(courses.sort(idSort))
+    courses: Object.freeze(courses.sort(idSort)),
+    outcomes: Object.freeze(seed.learningOutcomes.map((outcome) => ({
+      ...outcome,
+      prerequisiteOutcomeIds: [...outcome.prerequisiteOutcomeIds]
+    })))
   });
 };
 
@@ -484,15 +518,27 @@ const freezeResponse = (
 @Injectable({ providedIn: 'root' })
 export class QuestionBankRepository {
   private readonly transport: MockTransport;
-  private readonly questions: readonly Question[];
-  private readonly courses: readonly QuestionCourseReference[];
+  private readonly questionEntities = new Map<QuestionId, Question>();
+  private readonly courseEntities = new Map<string, QuestionCourseReference>();
+  private readonly outcomeEntities = new Map<string, QuestionOutcomeReference>();
+  private readonly outcomeCourseIds = new Map<string, string>();
   private scenarioControls: MockScenarioControls = { ...DEFAULT_MOCK_SCENARIO };
+  private questionSequence = 1;
 
   constructor(@Optional() transport: MockTransport | null = null) {
     this.transport = transport ?? new MockTransport();
     const seed = createQuestionSeedData();
-    this.questions = seed.questions;
-    this.courses = seed.courses;
+    for (const question of seed.questions) {
+      this.questionEntities.set(question.id, cloneQuestion(question));
+    }
+    for (const course of seed.courses) {
+      this.courseEntities.set(String(course.id), Object.freeze({ ...course }));
+    }
+    for (const outcome of seed.outcomes) {
+      const reference = questionReferenceFromOutcome(outcome);
+      this.outcomeEntities.set(String(outcome.id), Object.freeze({ ...reference }));
+      this.outcomeCourseIds.set(String(outcome.id), String(outcome.courseId));
+    }
   }
 
   listQuestions(
@@ -502,7 +548,7 @@ export class QuestionBankRepository {
     return defer(() => {
       const query = normalizeQuestionListQuery(input);
       const access = getAccess(options);
-      const controls = normalizeScenarioControls(this.scenarioControls, options);
+      const controls = this.controlsFor(options);
       if (access === null) {
         return this.transport.execute(
           { method: 'GET', url: '/question-bank/questions', body: query },
@@ -526,7 +572,7 @@ export class QuestionBankRepository {
   getQuestion(id: QuestionId | string, options: QuestionBankRequestOptions = {}): Observable<Question> {
     return defer(() => {
       const access = getAccess(options);
-      const controls = normalizeScenarioControls(this.scenarioControls, options);
+      const controls = this.controlsFor(options);
       if (access === null) {
         return this.transport.execute(
           { method: 'GET', url: `/question-bank/questions/${String(id)}` },
@@ -540,10 +586,8 @@ export class QuestionBankRepository {
       return this.transport.execute(
         { method: 'GET', url: `/question-bank/questions/${String(id)}` },
         () => {
-          const question = this.questions.find(
-            (candidate) => candidate.id === id && access.courseIds.includes(candidate.courseId)
-          );
-          if (question === undefined) {
+          const question = this.questionEntities.get(asQuestionId(String(id)));
+          if (question === undefined || !access.courseIds.includes(String(question.courseId))) {
             throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.');
           }
           return cloneQuestion(question);
@@ -560,7 +604,7 @@ export class QuestionBankRepository {
   listCourseOptions(options: QuestionBankRequestOptions = {}): Observable<readonly QuestionCourseReference[]> {
     return defer(() => {
       const access = getAccess(options);
-      const controls = normalizeScenarioControls(this.scenarioControls, options);
+      const controls = this.controlsFor(options);
       if (access === null) {
         return this.transport.execute(
           { method: 'GET', url: '/question-bank/courses' },
@@ -571,10 +615,154 @@ export class QuestionBankRepository {
       return this.transport.execute(
         { method: 'GET', url: '/question-bank/courses' },
         () => Object.freeze(
-          this.courses
-            .filter((course) => access.courseIds.includes(course.id))
+          [...this.courseEntities.values()]
+            .filter((course) => access.courseIds.includes(String(course.id)))
             .map((course) => Object.freeze({ ...course }))
         ),
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
+  listOutcomeOptions(
+    courseId: string,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<readonly QuestionOutcomeReference[]> {
+    return defer(() => {
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      const url = `/question-bank/courses/${String(courseId)}/outcomes`;
+      if (access === null) {
+        return this.transport.execute(
+          { method: 'GET', url },
+          () => Object.freeze([] as readonly QuestionOutcomeReference[]),
+          { ...controls, outcome: 'unauthorized' }
+        ).pipe(map(({ body }) => body));
+      }
+      return this.transport.execute(
+        { method: 'GET', url },
+        () => {
+          if (!access.courseIds.includes(String(courseId)) || !this.courseEntities.has(String(courseId))) {
+            throw new QuestionBankError('unauthorized', 'You are not authorized to view outcomes for this course.');
+          }
+          return Object.freeze(
+            [...this.outcomeEntities.entries()]
+              .filter(([id]) => this.outcomeCourseIds.get(id) === String(courseId))
+              .map(([, outcome]) => Object.freeze({ ...outcome }))
+          );
+        },
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
+  createQuestion(
+    input: QuestionCreateInput,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return defer(() => {
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      const request = { method: 'POST' as const, url: '/question-bank/questions', body: input };
+      if (access === null) {
+        return this.unauthorizedWrite(request, controls);
+      }
+
+      const requestedCourseId = this.readId(input, 'courseId');
+      if (requestedCourseId !== null && !access.courseIds.includes(requestedCourseId)) {
+        return this.unauthorizedWrite(request, controls);
+      }
+      const normalized = this.normalizePayload(input);
+      if (!access.courseIds.includes(String(normalized.courseId))) {
+        return this.unauthorizedWrite(request, controls);
+      }
+
+      return this.transport.execute(
+        request,
+        () => {
+          const id = this.nextQuestionId(normalized.courseId);
+          const timestamp = new Date().toISOString();
+          const next = deepFreeze({
+            id,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            version: 1,
+            ...normalized,
+            course: Object.freeze({ ...this.courseEntities.get(String(normalized.courseId))! }),
+            outcome: Object.freeze({ ...this.outcomeEntities.get(String(normalized.outcomeId))! })
+          }) as Question;
+          this.questionEntities.set(id, next);
+          return cloneQuestion(next);
+        },
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
+  updateQuestion(
+    id: QuestionId | string,
+    input: QuestionUpdateInput,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return defer(() => {
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      const request = { method: 'PATCH' as const, url: `/question-bank/questions/${String(id)}`, body: input };
+      if (access === null) {
+        return this.unauthorizedWrite(request, controls);
+      }
+      const current = this.questionEntities.get(asQuestionId(String(id)));
+      if (current === undefined) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.', String(id));
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+      if (!access.courseIds.includes(String(current.courseId))) {
+        return this.unauthorizedWrite(request, controls);
+      }
+      const requestedCourseId = this.readId(input, 'courseId');
+      if (requestedCourseId !== null && !access.courseIds.includes(requestedCourseId)) {
+        return this.unauthorizedWrite(request, controls);
+      }
+      if (current.status === 'published' || current.status === 'archived') {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError(
+              'not-editable',
+              'Published and archived questions are preview-only here. Create a new version in the later publish workflow.',
+              String(id)
+            );
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+      this.assertExpectedVersion(current, options);
+      const normalized = this.normalizePayload(input, current);
+      if (!access.courseIds.includes(String(normalized.courseId))) {
+        return this.unauthorizedWrite(request, controls);
+      }
+
+      return this.transport.execute(
+        request,
+        () => {
+          const next = deepFreeze({
+            ...current,
+            ...normalized,
+            id: current.id,
+            createdAt: current.createdAt,
+            updatedAt: new Date().toISOString(),
+            version: current.version + 1,
+            course: Object.freeze({ ...this.courseEntities.get(String(normalized.courseId))! }),
+            outcome: Object.freeze({ ...this.outcomeEntities.get(String(normalized.outcomeId))! })
+          }) as Question;
+          this.questionEntities.set(current.id, next);
+          return cloneQuestion(next);
+        },
         controls
       ).pipe(map(({ body }) => body));
     });
@@ -601,7 +789,7 @@ export class QuestionBankRepository {
 
   getSnapshot(): Readonly<{ readonly questions: readonly Question[] }> {
     return Object.freeze({
-      questions: Object.freeze(this.questions.map(cloneQuestion))
+      questions: Object.freeze([...this.questionEntities.values()].map(cloneQuestion))
     });
   }
 
@@ -609,10 +797,12 @@ export class QuestionBankRepository {
     query: QuestionListQuery,
     access: NormalizedQuestionAccess
   ): QuestionListResponse {
-    const scoped = this.questions.filter((question) => access.courseIds.includes(question.courseId));
+    const scoped = [...this.questionEntities.values()].filter((question) =>
+      access.courseIds.includes(String(question.courseId))
+    );
     const searchAndFilters = scoped.filter((question) =>
       matchesSearch(question, query.search) &&
-      (query.course.length === 0 || question.courseId === query.course) &&
+      (query.course.length === 0 || String(question.courseId) === query.course) &&
       (query.grade.length === 0 || question.grade === query.grade) &&
       (query.difficulty.length === 0 || question.difficulty === query.difficulty) &&
       (query.type.length === 0 || question.type === query.type)
@@ -632,6 +822,298 @@ export class QuestionBankRepository {
     const items = sorted.slice(offset, offset + query.pageSize);
     return freezeResponse(items, total, page, query.pageSize, totalPages, query, counts);
   }
+
+  private controlsFor(options: QuestionBankRequestOptions): Partial<MockScenarioControls> {
+    const {
+      session: _session,
+      access: _access,
+      expectedVersion: _expectedVersion,
+      ...controls
+    } = options;
+    return { ...this.scenarioControls, ...controls };
+  }
+
+  private unauthorizedWrite<TRequest extends { readonly method: 'POST' | 'PATCH'; readonly url: string; readonly body: unknown }>(
+    request: TRequest,
+    controls: Partial<MockScenarioControls>
+  ): Observable<Question> {
+    return this.transport.execute(
+      request,
+      () => {
+        throw new QuestionBankError(
+          'unauthorized',
+          'You are not authorized to modify questions in the active course scope.'
+        );
+      },
+      controls
+    ).pipe(map(({ body }) => body));
+  }
+
+  private readId(input: unknown, key: string): string | null {
+    if (!isRecord(input) || input[key] === undefined) {
+      return null;
+    }
+    return typeof input[key] === 'string' && input[key].trim().length > 0 ? input[key].trim() : null;
+  }
+
+  private nextQuestionId(courseId: string): QuestionId {
+    const course = this.courseEntities.get(String(courseId));
+    const courseToken = normalizeSeedToken(course?.code) || normalizeSeedToken(courseId) || 'course';
+    const identity = normalizeSeedToken(courseId).replace(/^COURSE-/i, '') || courseToken;
+    let id: QuestionId;
+    do {
+      id = asQuestionId(
+        `QUESTION-${courseToken}-${identity}-NEW-${String(this.questionSequence).padStart(4, '0')}`
+      );
+      this.questionSequence += 1;
+    } while (this.questionEntities.has(id));
+    return id;
+  }
+
+  private assertExpectedVersion(current: Question, options: QuestionBankRequestOptions): void {
+    if (options.expectedVersion !== undefined && options.expectedVersion !== current.version) {
+      throw new QuestionBankError(
+        'conflict',
+        `Question ${current.id} changed elsewhere. Reload the question before trying again.`,
+        String(current.id)
+      );
+    }
+  }
+
+  private normalizePayload(
+    input: unknown,
+    current?: Question
+  ): Readonly<{
+    readonly courseId: Question['courseId'];
+    readonly outcomeId: Question['outcomeId'];
+    readonly title: string;
+    readonly stem: string;
+    readonly explanation: string;
+    readonly tags: readonly string[];
+    readonly difficulty: Question['difficulty'];
+    readonly points: number;
+    readonly grade: Question['grade'];
+    readonly type: Question['type'];
+    readonly options: readonly QuestionOption[];
+    readonly answer: QuestionAnswer;
+    readonly status: 'draft' | 'review';
+  }> {
+    if (!isRecord(input)) {
+      throw new QuestionBankError('validation', 'Question input must be an object.');
+    }
+    const value = (key: string, fallback: unknown): unknown =>
+      input[key] === undefined ? fallback : input[key];
+    const courseIdValue = this.requiredText(value('courseId', current?.courseId), 'Course');
+    const outcomeIdValue = this.requiredText(value('outcomeId', current?.outcomeId), 'Outcome');
+    if (!this.courseEntities.has(courseIdValue)) {
+      throw new QuestionBankError('validation', 'Select an available course.');
+    }
+    const outcome = this.outcomeEntities.get(outcomeIdValue);
+    if (outcome === undefined || this.outcomeCourseIds.get(outcomeIdValue) !== courseIdValue) {
+      throw new QuestionBankError('validation', 'The selected outcome must belong to the selected course.');
+    }
+    const title = this.requiredText(value('title', current?.title), 'Title');
+    const stem = this.requiredText(value('stem', current?.stem), 'Stem');
+    const explanation = this.requiredText(value('explanation', current?.explanation), 'Explanation');
+    const tags = this.normalizeTags(value('tags', current?.tags));
+    const difficultyValue = value('difficulty', current?.difficulty);
+    const gradeValue = value('grade', current?.grade);
+    const typeValue = value('type', current?.type);
+    if (!(QUESTION_DIFFICULTIES as readonly string[]).includes(String(difficultyValue))) {
+      throw new QuestionBankError('validation', 'Choose a supported difficulty.');
+    }
+    if (!(QUESTION_GRADES as readonly string[]).includes(String(gradeValue))) {
+      throw new QuestionBankError('validation', 'Choose a supported grade.');
+    }
+    if (!(QUESTION_TYPES as readonly string[]).includes(String(typeValue))) {
+      throw new QuestionBankError('validation', 'Choose a supported question type.');
+    }
+    const pointsValue = value('points', current?.points);
+    if (typeof pointsValue !== 'number' || !Number.isFinite(pointsValue) || pointsValue <= 0) {
+      throw new QuestionBankError('validation', 'Points must be a positive number.');
+    }
+    const normalizedAnswer = this.normalizeAnswer(
+      typeValue as QuestionType,
+      value('options', current?.options),
+      value('answer', current?.answer)
+    );
+    const statusValue = value('status', current?.status ?? 'draft');
+    if (statusValue !== 'draft' && statusValue !== 'review') {
+      throw new QuestionBankError(
+        'not-editable',
+        'Only draft and review questions can be saved here. Published and archived questions require a later version workflow.'
+      );
+    }
+    return deepFreeze({
+      courseId: asCourseId(courseIdValue),
+      outcomeId: asLearningOutcomeId(outcomeIdValue),
+      title,
+      stem,
+      explanation,
+      tags,
+      difficulty: difficultyValue as Question['difficulty'],
+      points: pointsValue,
+      grade: gradeValue as Question['grade'],
+      type: typeValue as QuestionType,
+      options: normalizedAnswer.options,
+      answer: normalizedAnswer.answer,
+      status: statusValue
+    });
+  }
+
+  private requiredText(value: unknown, label: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new QuestionBankError('validation', `${label} is required.`);
+    }
+    return value.trim();
+  }
+
+  private normalizeTags(value: unknown): readonly string[] {
+    const raw = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(',')
+        : null;
+    if (raw === null || raw.some((tag) => typeof tag !== 'string')) {
+      throw new QuestionBankError('validation', 'Tags must be a list of text tokens.');
+    }
+    const seen = new Set<string>();
+    const tags: string[] = [];
+    for (const token of raw as readonly string[]) {
+      const normalized = token.trim();
+      const key = normalized.toLocaleLowerCase();
+      if (normalized.length > 0 && !seen.has(key)) {
+        seen.add(key);
+        tags.push(normalized);
+      }
+    }
+    return Object.freeze(tags);
+  }
+
+  private normalizeAnswer(
+    type: QuestionType,
+    rawOptions: unknown,
+    rawAnswer: unknown
+  ): { readonly options: readonly QuestionOption[]; readonly answer: QuestionAnswer } {
+    const answer = isRecord(rawAnswer) ? rawAnswer : null;
+    if (type === 'single-choice' || type === 'multiple-choice') {
+      const options = this.normalizeOptions(rawOptions);
+      if (answer?.['kind'] !== 'choice' || !Array.isArray(answer['optionIds'])) {
+        throw new QuestionBankError('validation', 'Choose at least one correct option.');
+      }
+      const optionIds = answer['optionIds'];
+      if (optionIds.some((id) => typeof id !== 'string')) {
+        throw new QuestionBankError('validation', 'Correct option IDs must be text.');
+      }
+      const selected = (optionIds as readonly string[]).map((id) => id.trim());
+      const available = new Set(options.map((option) => option.id));
+      const unique = [...new Set(selected)];
+      if (unique.some((id) => id.length === 0 || !available.has(id))) {
+        throw new QuestionBankError('validation', 'Choose correct options from the available options.');
+      }
+      if (type === 'single-choice' && unique.length !== 1) {
+        throw new QuestionBankError('validation', 'Single-choice questions require exactly one correct option.');
+      }
+      if (type === 'multiple-choice' && unique.length < 1) {
+        throw new QuestionBankError('validation', 'Multiple-choice questions require at least one correct option.');
+      }
+      return {
+        options,
+        answer: Object.freeze({ kind: 'choice', optionIds: Object.freeze(unique) })
+      };
+    }
+    if (type === 'true-false') {
+      if (answer?.['kind'] !== 'boolean' || typeof answer['value'] !== 'boolean') {
+        throw new QuestionBankError('validation', 'Choose true or false for the answer.');
+      }
+      return {
+        options: Object.freeze([
+          Object.freeze({ id: 'true', label: 'True' }),
+          Object.freeze({ id: 'false', label: 'False' })
+        ]),
+        answer: Object.freeze({ kind: 'boolean', value: answer['value'] })
+      };
+    }
+    if (type === 'matching') {
+      if (answer?.['kind'] !== 'matching' || !Array.isArray(answer['pairs']) || answer['pairs'].length < 2) {
+        throw new QuestionBankError('validation', 'Matching questions require at least two pairs.');
+      }
+      const seen = new Set<string>();
+      const pairs = answer['pairs'].map((pair, index) => {
+        if (!isRecord(pair)) {
+          throw new QuestionBankError('validation', `Matching pair ${index + 1} is invalid.`);
+        }
+        const prompt = this.requiredText(pair['prompt'], `Matching prompt ${index + 1}`);
+        const response = this.requiredText(pair['answer'], `Matching answer ${index + 1}`);
+        const key = prompt.toLocaleLowerCase();
+        if (seen.has(key)) {
+          throw new QuestionBankError('validation', 'Matching prompts must be unique.');
+        }
+        seen.add(key);
+        return Object.freeze({ prompt, answer: response });
+      });
+      return {
+        options: Object.freeze([]),
+        answer: Object.freeze({ kind: 'matching', pairs: Object.freeze(pairs) })
+      };
+    }
+    if (type === 'short-answer') {
+      if (answer?.['kind'] !== 'short-answer' || !Array.isArray(answer['acceptedAnswers'])) {
+        throw new QuestionBankError('validation', 'Add at least one accepted short answer.');
+      }
+      const seen = new Set<string>();
+      const acceptedAnswers: string[] = [];
+      for (const value of answer['acceptedAnswers']) {
+        const accepted = this.requiredText(value, 'Accepted answer');
+        const key = accepted.toLocaleLowerCase();
+        if (seen.has(key)) {
+          throw new QuestionBankError('validation', 'Accepted short answers must be unique.');
+        }
+        seen.add(key);
+        acceptedAnswers.push(accepted);
+      }
+      if (acceptedAnswers.length === 0) {
+        throw new QuestionBankError('validation', 'Add at least one accepted short answer.');
+      }
+      return {
+        options: Object.freeze([]),
+        answer: Object.freeze({ kind: 'short-answer', acceptedAnswers: Object.freeze(acceptedAnswers) })
+      };
+    }
+    if (answer?.['kind'] !== 'essay') {
+      throw new QuestionBankError('validation', 'Essay questions require rubric guidance.');
+    }
+    return {
+      options: Object.freeze([]),
+      answer: Object.freeze({
+        kind: 'essay',
+        rubricHint: this.requiredText(answer['rubricHint'], 'Rubric hint')
+      })
+    };
+  }
+
+  private normalizeOptions(value: unknown): readonly QuestionOption[] {
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new QuestionBankError('validation', 'Add at least one answer option.');
+    }
+    const ids = new Set<string>();
+    const labels = new Set<string>();
+    const options = value.map((option, index) => {
+      if (!isRecord(option)) {
+        throw new QuestionBankError('validation', `Option ${index + 1} is invalid.`);
+      }
+      const id = this.requiredText(option['id'], `Option ${index + 1} ID`);
+      const label = this.requiredText(option['label'], `Option ${index + 1}`);
+      const labelKey = label.toLocaleLowerCase();
+      if (ids.has(id) || labels.has(labelKey)) {
+        throw new QuestionBankError('validation', 'Option IDs and labels must be unique.');
+      }
+      ids.add(id);
+      labels.add(labelKey);
+      return Object.freeze({ id, label });
+    });
+    return Object.freeze(options);
+  }
 }
 
 @Injectable({ providedIn: 'root' })
@@ -644,6 +1126,8 @@ export class QuestionBankFacade {
   private readonly writableSelectedQuestion = signal<Question | null>(null);
   private readonly writableSelectionNotice = signal('');
   private readonly writableCourseOptions = signal<readonly QuestionCourseReference[]>([]);
+  private readonly writableOutcomeOptions = signal<readonly QuestionOutcomeReference[]>([]);
+  private readonly writableSaveRequestState = signal<QuestionBankSaveRequestState>({ status: 'idle' });
   private lastQuery: QuestionListQuery = normalizeQuestionListQuery();
 
   readonly requestState: Signal<QuestionBankRequestState> = this.writableRequestState.asReadonly();
@@ -654,6 +1138,14 @@ export class QuestionBankFacade {
   readonly selectedEntity: Signal<Question | null> = this.selectedQuestion;
   readonly selectionNotice: Signal<string> = this.writableSelectionNotice.asReadonly();
   readonly courseOptions: Signal<readonly QuestionCourseReference[]> = this.writableCourseOptions.asReadonly();
+  readonly outcomeOptions: Signal<readonly QuestionOutcomeReference[]> = this.writableOutcomeOptions.asReadonly();
+  readonly saveRequestState: Signal<QuestionBankSaveRequestState> = this.writableSaveRequestState.asReadonly();
+  readonly saveState: Signal<QuestionBankSaveRequestState> = this.saveRequestState;
+  readonly saveFeedback = computed(() => this.saveRequestState().message ?? '');
+  readonly editorReferences = computed<QuestionEditorReferenceData>(() => ({
+    courses: this.courseOptions(),
+    outcomes: this.outcomeOptions()
+  }));
   readonly statusCounts = computed<QuestionStatusCounts>(() =>
     this.pageResult()?.statusCounts ?? EMPTY_QUESTION_STATUS_COUNTS
   );
@@ -692,9 +1184,14 @@ export class QuestionBankFacade {
       }),
       catchError((error: unknown) => {
         const normalized = normalizeApplicationError(error);
-        const status = normalized.kind === 'unauthorized' ? 'unauthorized' : 'error';
+        const status = error instanceof QuestionBankError && error.code === 'unauthorized'
+          ? 'unauthorized'
+          : normalized.kind === 'unauthorized' ? 'unauthorized' : 'error';
         this.writablePageResult.set(null);
-        this.writableRequestState.set({ status, message: normalized.userMessage });
+        this.writableRequestState.set({
+          status,
+          message: error instanceof QuestionBankError ? error.message : normalized.userMessage
+        });
         return throwError(() => error);
       })
     );
@@ -723,15 +1220,19 @@ export class QuestionBankFacade {
       ...options
     })).pipe(
       tap((question) => {
-        this.writableSelectedId.set(question.id);
-        this.writableSelectedQuestion.set(question);
-        this.writableSelectionNotice.set('');
+        this.setSelectedQuestion(question);
       }),
       map((question) => question),
       catchError((error: unknown) => {
         const normalizedError = normalizeApplicationError(error);
-        if (normalizedError.kind === 'unauthorized') {
-          this.writableRequestState.set({ status: 'unauthorized', message: normalizedError.userMessage });
+        if (
+          (error instanceof QuestionBankError && error.code === 'unauthorized') ||
+          normalizedError.kind === 'unauthorized'
+        ) {
+          this.writableRequestState.set({
+            status: 'unauthorized',
+            message: error instanceof QuestionBankError ? error.message : normalizedError.userMessage
+          });
           this.clearSelection('Selection cleared because access to the question scope is unavailable.');
         } else {
           this.clearSelection('Selection cleared because the question is missing or stale.');
@@ -760,12 +1261,139 @@ export class QuestionBankFacade {
     );
   }
 
+  loadOutcomeOptions(
+    courseId: string | null | undefined,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<readonly QuestionOutcomeReference[]> {
+    if (typeof courseId !== 'string' || courseId.trim().length === 0) {
+      this.writableOutcomeOptions.set([]);
+      return of([]);
+    }
+    return defer(() => this.repository.listOutcomeOptions(courseId.trim(), {
+      ...this.sessionOptions(),
+      ...options
+    })).pipe(
+      tap((outcomes) => this.writableOutcomeOptions.set(outcomes))
+    );
+  }
+
+  createQuestion(
+    input: QuestionCreateInput,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return this.writeQuestion(() => this.repository.createQuestion(input, {
+      ...this.sessionOptions(),
+      ...options
+    }));
+  }
+
+  updateQuestion(
+    id: QuestionId | string,
+    input: QuestionUpdateInput,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return this.writeQuestion(() => this.repository.updateQuestion(id, input, {
+      ...this.sessionOptions(),
+      ...options
+    }));
+  }
+
   setMockScenario(controls: Partial<MockScenarioControls>): void {
     this.repository.setMockScenario(controls);
   }
 
   resetMockScenario(): void {
     this.repository.resetMockScenario();
+  }
+
+  private writeQuestion(factory: () => Observable<Question>): Observable<Question> {
+    this.writableSaveRequestState.set({ status: 'saving' });
+    return defer(factory).pipe(
+      tap((question) => {
+        this.setSelectedQuestion(question);
+        this.mergeSavedQuestion(question);
+        this.writableSaveRequestState.set({
+          status: 'success',
+          message: 'Question saved successfully.',
+          questionId: question.id
+        });
+      }),
+      catchError((error: unknown) => {
+        const normalized = normalizeApplicationError(error);
+        const domain = error instanceof QuestionBankError ? error : null;
+        const status: QuestionBankSaveStatus =
+          domain?.code === 'conflict' || normalized.kind === 'conflict'
+            ? 'conflict'
+            : domain?.code === 'unauthorized' || normalized.kind === 'unauthorized'
+              ? 'unauthorized'
+              : 'error';
+        const message = domain?.message ?? normalized.userMessage;
+        this.writableSaveRequestState.set({
+          status,
+          message,
+          questionId: domain?.id === undefined ? undefined : asQuestionId(domain.id),
+          retryable: normalized.retryable || status === 'conflict'
+        });
+        return throwError(() => error);
+      })
+    );
+  }
+
+  private setSelectedQuestion(question: Question): void {
+    this.writableSelectedId.set(question.id);
+    this.writableSelectedQuestion.set(cloneQuestion(question));
+    this.writableSelectionNotice.set('');
+  }
+
+  private mergeSavedQuestion(question: Question): void {
+    const current = this.writablePageResult();
+    if (current === null) {
+      return;
+    }
+    const query = current.query;
+    const existingIndex = current.items.findIndex((item) => item.id === question.id);
+    const previous = existingIndex < 0 ? undefined : current.items[existingIndex];
+    const beforeIncluded = previous !== undefined && this.matchesListQuery(previous, query);
+    const afterIncluded = this.matchesListQuery(question, query);
+    const pageItems = [...current.items];
+    if (existingIndex >= 0) {
+      pageItems.splice(existingIndex, 1);
+    }
+    if (afterIncluded) {
+      pageItems.push(question);
+    }
+    const total = current.total + Number(afterIncluded) - Number(beforeIncluded);
+    const counts: Record<QuestionStatus, number> = {
+      ...current.statusCounts
+    };
+    const beforeCounted = previous !== undefined && this.matchesCountQuery(previous, query);
+    const afterCounted = this.matchesCountQuery(question, query);
+    if (beforeCounted) {
+      counts[previous!.status] = Math.max(0, counts[previous!.status] - 1);
+    }
+    if (afterCounted) {
+      counts[question.status] += 1;
+    }
+    const sorted = pageItems.sort((left, right) => compareQuestions(left, right, query.sort));
+    const totalPages = total === 0 ? 0 : Math.ceil(total / query.pageSize);
+    const page = totalPages === 0 ? 1 : Math.min(current.page, totalPages);
+    const offset = totalPages === 0 ? 0 : (page - 1) * query.pageSize;
+    this.writablePageResult.set(
+      freezeResponse(sorted.slice(offset, offset + query.pageSize), total, page, query.pageSize, totalPages, query, counts)
+    );
+  }
+
+  private matchesListQuery(question: Question, query: QuestionListQuery): boolean {
+    return this.matchesCountQuery(question, query) &&
+      (query.status.length === 0 || question.status === query.status);
+  }
+
+  private matchesCountQuery(question: Question, query: QuestionListQuery): boolean {
+    return matchesSearch(question, query.search) &&
+      (query.course.length === 0 || String(question.courseId) === query.course) &&
+      (query.grade.length === 0 || question.grade === query.grade) &&
+      (query.difficulty.length === 0 || question.difficulty === query.difficulty) &&
+      (query.type.length === 0 || question.type === query.type);
   }
 
   private sessionOptions(): QuestionBankRequestOptions {

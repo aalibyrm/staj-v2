@@ -22,6 +22,7 @@ import type {
   QuestionStatus,
   QuestionType
 } from '../models/question.models';
+import { QuestionEditorComponent } from './question-editor.component';
 
 interface QueryRequest {
   readonly query: QuestionListQuery;
@@ -41,7 +42,7 @@ const FILTER_DEFAULTS = {
 @Component({
   selector: 'app-question-bank',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, RequestStateComponent],
+  imports: [CommonModule, ReactiveFormsModule, RequestStateComponent, QuestionEditorComponent],
   providers: [QuestionBankFacade],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -52,7 +53,7 @@ const FILTER_DEFAULTS = {
           <h1 id="question-bank-heading">Question bank</h1>
           <p>Search and review immutable question entities in the active course scope.</p>
         </div>
-        <span class="read-only-note" aria-label="Read only list">Read only</span>
+        <div class="heading-actions"><span class="read-only-note" aria-label="Read only list">Read only list</span><button type="button" class="primary-button" (click)="startNewQuestion()">New question</button></div>
       </header>
 
       <form class="filter-bar" [formGroup]="filterForm" (submit)="$event.preventDefault()" aria-label="Question filters">
@@ -79,6 +80,12 @@ const FILTER_DEFAULTS = {
       </div>
 
       <p class="live-message" aria-live="polite">{{ liveMessage() }}</p>
+      <app-question-editor
+        *ngIf="editorOpen()"
+        [question]="editingQuestion()"
+        (cancel)="closeEditor()"
+        (saved)="onQuestionSaved($event)"
+      />
 
       <div class="content-grid">
         <section class="table-card" aria-labelledby="question-table-heading">
@@ -116,6 +123,10 @@ const FILTER_DEFAULTS = {
           <ng-container *ngIf="facade.selectedQuestion() as selected; else noSelection">
             <div class="inspector-id"><strong>{{ selected.id }}</strong><span class="table-badge status-badge"><span aria-hidden="true">{{ statusIcon(selected.status) }}</span> {{ statusLabel(selected.status) }}</span></div>
             <section class="preview-block"><h3>Preview</h3><p class="question-stem">{{ selected.stem }}</p><ol *ngIf="selected.options.length > 0" class="answer-options"><li *ngFor="let option of selected.options; trackBy: trackByOptionId">{{ option.label }}</li></ol><p class="answer-note"><strong>Answer representation:</strong> {{ answerLabel(selected) }}</p><p class="explanation"><strong>Explanation:</strong> {{ selected.explanation }}</p></section>
+            <div class="inspector-actions">
+              <button *ngIf="isEditable(selected)" type="button" class="primary-button" (click)="startEditQuestion(selected)">Edit question</button>
+              <p *ngIf="!isEditable(selected)" class="non-editable-note">Preview only. Published and archived questions require version creation in the later publish workflow.</p>
+            </div>
             <section class="metadata-block"><h3>Metadata</h3><dl><dt>Course</dt><dd>{{ selected.course.code }} · {{ selected.course.title }}</dd><dt>Outcome</dt><dd>{{ selected.outcome.code }} · {{ selected.outcome.title }}</dd><dt>Type</dt><dd>{{ typeLabel(selected.type) }}</dd><dt>Grade</dt><dd>{{ gradeLabel(selected.grade) }}</dd><dt>Difficulty</dt><dd>{{ difficultyLabel(selected.difficulty) }}</dd><dt>Points</dt><dd>{{ selected.points }}</dd><dt>Version</dt><dd>v{{ selected.version }} · immutable</dd><dt>Created</dt><dd><time [attr.datetime]="selected.createdAt">{{ selected.createdAt | date:'dd MMM yyyy' }}</time></dd><dt>Updated</dt><dd><time [attr.datetime]="selected.updatedAt">{{ selected.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time></dd></dl><div class="tag-list" aria-label="Question tags"><span *ngFor="let tag of selected.tags" class="tag">#{{ tag }}</span></div></section>
           </ng-container>
           <ng-template #noSelection><div class="inspector-empty"><span aria-hidden="true">⌁</span><h3>Select a question</h3><p>Choose one row to preview its current immutable content and metadata.</p></div></ng-template>
@@ -201,12 +212,18 @@ export class QuestionBankComponent implements OnInit {
   private lastSelectedKey = '';
   private readonly activeQuerySignal = signal(normalizeQuestionListQuery(FILTER_DEFAULTS));
   private readonly selectedRouteIdSignal = signal<QuestionId | null>(null);
+  readonly editorOpen = signal(false);
+  readonly editingQuestionId = signal<QuestionId | null>(null);
+  readonly editingQuestion = computed(() => {
+    const id = this.editingQuestionId();
+    return id === null ? null : this.questions().find((question) => question.id === id) ?? this.facade.selectedQuestion();
+  });
   readonly activeQuery = this.activeQuerySignal.asReadonly();
   readonly selectedRouteId = this.selectedRouteIdSignal.asReadonly();
   readonly questions = computed(() => this.facade.pageResult()?.items ?? []);
   readonly total = computed(() => this.facade.pageResult()?.total ?? 0);
   readonly statusTotal = computed(() =>
-    Object.values(this.facade.statusCounts()).reduce((sum, count) => sum + count, 0)
+    (Object.values(this.facade.statusCounts()) as readonly number[]).reduce((sum: number, count: number) => sum + count, 0)
   );
   readonly currentPage = computed(() => this.facade.pageResult()?.page ?? 1);
   readonly totalPages = computed(() => this.facade.pageResult()?.totalPages ?? 0);
@@ -290,10 +307,42 @@ export class QuestionBankComponent implements OnInit {
     this.selectionRequests.next(id);
   }
 
+  startNewQuestion(): void {
+    this.editingQuestionId.set(null);
+    this.editorOpen.set(true);
+    this.liveMessage.set('Create a new question.');
+  }
+
+  startEditQuestion(question: Question): void {
+    if (!this.isEditable(question)) {
+      return;
+    }
+    this.editingQuestionId.set(question.id);
+    this.editorOpen.set(true);
+    this.liveMessage.set(`${question.id} opened for editing.`);
+  }
+
+  closeEditor(): void {
+    this.editorOpen.set(false);
+    this.editingQuestionId.set(null);
+    this.liveMessage.set('Question editor closed.');
+  }
   clearSelection(): void {
+    this.facade.clearSelection();
     this.selectedRouteIdSignal.set(null);
-    this.facade.clearSelection('Selection cleared.');
+    this.liveMessage.set(this.facade.selectionNotice() || 'Selection cleared.');
     this.syncUrl(this.activeQuerySignal(), null);
+  }
+
+  onQuestionSaved(question: Question): void {
+    this.editorOpen.set(false);
+    this.editingQuestionId.set(null);
+    this.selectQuestion(question.id);
+    this.liveMessage.set(`${question.id} saved and selected.`);
+  }
+
+  isEditable(question: Question): boolean {
+    return question.status === 'draft' || question.status === 'review';
   }
 
   trackByQuestionId(_index: number, question: Question): QuestionId { return question.id; }

@@ -104,6 +104,38 @@ export type QuestionAnswer =
   | ShortAnswerQuestionAnswer
   | EssayQuestionAnswer;
 
+export type EditableQuestionStatus = Extract<QuestionStatus, 'draft' | 'review'>;
+
+export type QuestionEditableFields = Readonly<{
+  courseId: CourseId;
+  outcomeId: LearningOutcomeId;
+  title: string;
+  stem: string;
+  explanation: string;
+  tags: readonly string[];
+  difficulty: QuestionDifficulty;
+  points: number;
+  grade: QuestionGrade;
+  type: QuestionType;
+  options: readonly QuestionOption[];
+  answer: QuestionAnswer;
+}>;
+
+export type QuestionCreateInput = Readonly<QuestionEditableFields & {
+  readonly status?: EditableQuestionStatus;
+}>;
+
+export type QuestionUpdateInput = Readonly<Partial<QuestionEditableFields> & {
+  readonly status?: EditableQuestionStatus;
+}>;
+
+export type QuestionEditorMode = 'create' | 'edit' | 'preview';
+
+export interface QuestionEditorReferenceData {
+  readonly courses: readonly QuestionCourseReference[];
+  readonly outcomes: readonly QuestionOutcomeReference[];
+}
+
 export type Question = Readonly<{
   id: QuestionId;
   createdAt: string;
