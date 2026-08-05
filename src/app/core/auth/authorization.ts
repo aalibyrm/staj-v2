@@ -194,7 +194,7 @@ const ROUTE_CAPABILITY_PATHS: readonly RouteCapabilityPath[] = deepFreeze([
     ]
   },
   {
-    pattern: ['exam-builder'],
+    pattern: ['exams', 'new'],
     capabilities: [
       ROUTE_CAPABILITIES.instructorTeaching,
       ROUTE_CAPABILITIES.measurementWorkspace

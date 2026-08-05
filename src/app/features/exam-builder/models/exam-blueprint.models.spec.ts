@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { LearningOutcomeId } from '../../adaptive-learning/models/seed-domain.models';
 import {
+  compareExamBlueprint,
   createExamBlueprint,
   validateExamBlueprint,
+  type ExamBlueprint,
+  type ExamBlueprintCurrentCoverageInput,
   type ExamBlueprintInput
 } from './exam-blueprint.models';
 
@@ -112,5 +115,65 @@ describe('exam blueprint model', () => {
     expect(first.some((issue) => issue.path === 'difficultyBuckets[0].key')).toBe(true);
     expect(() => validateExamBlueprint(null)).not.toThrow();
     expect(createExamBlueprint(invalid)).toBeNull();
+  });
+});
+
+describe('exam blueprint coverage comparison', () => {
+  const target = (): NonNullable<ReturnType<typeof createExamBlueprint>> => {
+    const blueprint = createExamBlueprint(validInput());
+    if (blueprint === null) throw new Error('Expected valid blueprint.');
+    return blueprint;
+  };
+
+  const current = (overrides: Partial<ExamBlueprintCurrentCoverageInput> = {}): ExamBlueprintCurrentCoverageInput => ({
+    outcomeBuckets: [
+      { key: outcome('OUT-1'), currentQuestionCount: 1, currentPoints: 0.1 },
+      { key: outcome('OUT-2'), currentQuestionCount: 2, currentPoints: 0.2 }
+    ],
+    difficultyBuckets: [
+      { key: 'easy', currentQuestionCount: 1, currentPoints: 0.1 },
+      { key: 'medium', currentQuestionCount: 2, currentPoints: 0.2 }
+    ],
+    questionTypeBuckets: [
+      { key: 'single-choice', currentQuestionCount: 1, currentPoints: 0.1 },
+      { key: 'multiple-choice', currentQuestionCount: 2, currentPoints: 0.2 }
+    ],
+    ...overrides
+  });
+
+  it('returns valid, missing, and partial states with deterministic reasons', () => {
+    const valid = compareExamBlueprint(target(), current());
+    expect(valid.status).toBe('valid');
+    expect(valid.outcomeBuckets[0]?.status).toBe('met');
+
+    const missing = compareExamBlueprint(target(), {
+      outcomeBuckets: [], difficultyBuckets: [], questionTypeBuckets: []
+    });
+    expect(missing.status).toBe('missing');
+    expect(missing.outcomeBuckets[0]?.reason).toContain('missing');
+
+    const partial = compareExamBlueprint(target(), current({
+      outcomeBuckets: [
+        { key: outcome('OUT-2'), currentQuestionCount: 3, currentPoints: 0.3 },
+        { key: outcome('OUT-Z'), currentQuestionCount: 1, currentPoints: 0.1 },
+        { key: outcome('OUT-A'), currentQuestionCount: 1, currentPoints: 0.1 }
+      ]
+    }));
+    expect(partial.status).toBe('partial');
+    expect(partial.outcomeBuckets.map((row) => row.key)).toEqual(['OUT-1', 'OUT-2', 'OUT-A', 'OUT-Z']);
+    expect(partial.outcomeBuckets.at(-1)?.status).toBe('excess');
+  });
+
+  it('uses stable decimal precision and deeply freezes output without mutating input', () => {
+    const input = current({
+      outcomeBuckets: [{ key: outcome('OUT-1'), currentQuestionCount: 1, currentPoints: 0.1 + 0.2 }]
+    });
+    const before = JSON.stringify(input);
+    const result = compareExamBlueprint(target(), input);
+    expect(result.outcomeBuckets[0]?.pointsDelta).toBe(0.2);
+    expect(JSON.stringify(input)).toBe(before);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.outcomeBuckets)).toBe(true);
+    expect(Object.isFrozen(result.outcomeBuckets[0])).toBe(true);
   });
 });

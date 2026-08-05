@@ -18,6 +18,8 @@ import { OutcomeGraphComponent } from '../../features/learning-domain/components
 import { CourseContentCatalogComponent } from '../../features/learning-domain/components/course-content-catalog.component';
 import { QuestionBankComponent } from '../../features/question-bank/components/question-bank.component';
 import { adaptiveLearningRoutes } from '../../features/adaptive-learning/adaptive-learning.routes';
+import { ExamBuilderComponent } from '../../features/exam-builder/components/exam-builder.component';
+
 
 @Component({
   standalone: true,
@@ -40,7 +42,7 @@ const concreteRoutes: ReadonlyArray<readonly [string, string, RoleCode]> = [
   ['/outcomes/map', 'Outcomes map', 'PROGRAM_MANAGER'],
   ['/question-bank', 'Question bank', 'INSTRUCTOR'],
   ['/questions/question-7', 'Question', 'INSTRUCTOR'],
-  ['/exam-builder', 'Exam builder', 'INSTRUCTOR'],
+  ['/exams/new', 'Build an exam blueprint', 'INSTRUCTOR'],
   ['/exams', 'Exams', 'INSTRUCTOR'],
   ['/exam-session/session-token', 'Exam session', 'STUDENT'],
   ['/grading', 'Grading', 'INSTRUCTOR'],
@@ -146,7 +148,7 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"], main[aria-labelledby="exam-builder-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
@@ -179,6 +181,33 @@ describe('application routes', () => {
     await harness.navigateByUrl('/question-bank');
     expect(router.url).toBe('/unauthorized?returnUrl=%2Fquestion-bank');
   });
+  it('lazy-loads /exams/new for instructor and measurement specialist and removes the old alias', async () => {
+    const examRoute = adaptiveLearningRoutes.find((route) => route.path === 'exams/new');
+    expect(adaptiveLearningRoutes.some((route) => route.path === 'exam-builder')).toBe(false);
+    expect(examRoute?.pathMatch).toBe('full');
+    expect(examRoute?.canMatch).toContain(authGuard);
+    expect(examRoute?.component).toBeUndefined();
+    expect(examRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]);
+    expect(await examRoute?.loadComponent?.()).toBe(ExamBuilderComponent);
+
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const sessionStore = TestBed.inject(SessionStore);
+    for (const role of ['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const) {
+      sessionStore.signIn(accountIdFor(role));
+      await harness.navigateByUrl('/exams/new');
+      expect(router.url).toBe('/exams/new');
+      expect(harness.routeNativeElement?.querySelector('#exam-builder-heading')).not.toBeNull();
+    }
+    sessionStore.signIn(accountIdFor('STUDENT'));
+    await harness.navigateByUrl('/unauthorized');
+    await harness.navigateByUrl('/exams/new');
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Fexams%2Fnew');
+  });
+
   it('resolves the lazy outcome map for its three roles and denies an unrelated role', async () => {
     const harness = await RouterTestingHarness.create();
     const router = TestBed.inject(Router);

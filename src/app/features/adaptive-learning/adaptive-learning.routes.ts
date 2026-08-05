@@ -27,6 +27,11 @@ const loadQuestionBank = () =>
   import('../question-bank/components/question-bank.component').then(
     ({ QuestionBankComponent }) => QuestionBankComponent
   );
+const loadExamBuilder = () =>
+  import('../exam-builder/components/exam-builder.component').then(
+    ({ ExamBuilderComponent }) => ExamBuilderComponent
+  );
+
 
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
@@ -125,10 +130,19 @@ export const adaptiveLearningRoutes: Routes = [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace
   ]),
-  placeholderRoute('exam-builder', 'Exam builder', [
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.measurementWorkspace
-  ]),
+  {
+    path: 'exams/new',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Exam builder',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.measurementWorkspace
+      ]
+    },
+    loadComponent: loadExamBuilder
+  },
   placeholderRoute('exams', 'Exams', [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace

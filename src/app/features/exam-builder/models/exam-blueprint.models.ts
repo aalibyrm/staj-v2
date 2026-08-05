@@ -37,6 +37,59 @@ export type ExamBlueprint = Readonly<{
   readonly difficultyBuckets: readonly ExamBlueprintDifficultyBucket[];
   readonly questionTypeBuckets: readonly ExamBlueprintQuestionTypeBucket[];
 }>;
+export type ExamBlueprintCoverageBucketInput<Key extends string = string> = Readonly<{
+  readonly key: Key;
+  readonly currentQuestionCount: number;
+  readonly currentPoints: number;
+}>;
+
+export type ExamBlueprintCoverageBucket<Key extends string = string> = ExamBlueprintCoverageBucketInput<Key>;
+
+export type ExamBlueprintCurrentCoverageInput = Readonly<{
+  readonly outcomeBuckets: readonly ExamBlueprintCoverageBucketInput<LearningOutcomeId>[];
+  readonly difficultyBuckets: readonly ExamBlueprintCoverageBucketInput<QuestionDifficulty>[];
+  readonly questionTypeBuckets: readonly ExamBlueprintCoverageBucketInput<QuestionType>[];
+}>;
+
+export type ExamBlueprintCurrentCoverage = ExamBlueprintCurrentCoverageInput;
+export type ExamBlueprintComparisonAggregateStatus = 'valid' | 'partial' | 'missing';
+export type ExamBlueprintBucketComparisonStatus = 'met' | 'missing' | 'excess';
+export type ExamBlueprintComparisonDimension = 'outcome' | 'difficulty' | 'questionType';
+
+export type ExamBlueprintBucketComparison<Key extends string = string> = Readonly<{
+  readonly key: Key;
+  readonly targetQuestionCount: number;
+  readonly currentQuestionCount: number;
+  readonly targetPoints: number;
+  readonly currentPoints: number;
+  readonly questionCountDelta: number;
+  readonly pointsDelta: number;
+  readonly remainingQuestionCount: number;
+  readonly excessQuestionCount: number;
+  readonly remainingPoints: number;
+  readonly excessPoints: number;
+  readonly status: ExamBlueprintBucketComparisonStatus;
+  readonly reason: string;
+}>;
+
+export type ExamBlueprintDimensionComparison<Key extends string = string> = Readonly<{
+  readonly dimension: ExamBlueprintComparisonDimension;
+  readonly buckets: readonly ExamBlueprintBucketComparison<Key>[];
+}>;
+
+export type ExamBlueprintComparison = Readonly<{
+  readonly status: ExamBlueprintComparisonAggregateStatus;
+  readonly outcomeBuckets: readonly ExamBlueprintBucketComparison<LearningOutcomeId>[];
+  readonly difficultyBuckets: readonly ExamBlueprintBucketComparison<QuestionDifficulty>[];
+  readonly questionTypeBuckets: readonly ExamBlueprintBucketComparison<QuestionType>[];
+  readonly dimensions: readonly [
+    ExamBlueprintDimensionComparison<LearningOutcomeId>,
+    ExamBlueprintDimensionComparison<QuestionDifficulty>,
+    ExamBlueprintDimensionComparison<QuestionType>
+  ];
+  readonly summary: string;
+}>;
+
 
 export type ExamBlueprintValidationIssueCode =
   | 'invalid-target-question-count'
@@ -296,3 +349,129 @@ export const createExamBlueprint = (input: unknown): ExamBlueprint | null => {
     )
   } satisfies ExamBlueprint);
 };
+const POINT_DECIMAL_SCALE = 10 ** POINT_DECIMAL_PLACES;
+
+const coverageCount = (value: number): number =>
+  Number.isSafeInteger(value) && value >= 0 ? value : 0;
+
+const coveragePointUnits = (value: number): bigint =>
+  Number.isFinite(value) && value >= 0 ? stablePointUnits(value) ?? 0n : 0n;
+
+const coveragePoint = (units: bigint): number => Number(units) / POINT_DECIMAL_SCALE;
+
+const formatCoverageNumber = (value: number): string =>
+  value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: POINT_DECIMAL_PLACES });
+
+const coverageReason = (questionCountDelta: number, pointsDelta: number): string => {
+  const reasons: string[] = [];
+  if (questionCountDelta < 0) {
+    const amount = -questionCountDelta;
+    reasons.push(`${amount} question${amount === 1 ? '' : 's'} missing`);
+  } else if (questionCountDelta > 0) {
+    reasons.push(`${questionCountDelta} question${questionCountDelta === 1 ? '' : 's'} excess`);
+  }
+  if (pointsDelta < 0) {
+    reasons.push(`${formatCoverageNumber(-pointsDelta)} point${pointsDelta === -1 ? '' : 's'} missing`);
+  } else if (pointsDelta > 0) {
+    reasons.push(`${formatCoverageNumber(pointsDelta)} point${pointsDelta === 1 ? '' : 's'} excess`);
+  }
+  return reasons.length === 0 ? 'Target and current coverage match.' : `${reasons.join('; ')}.`;
+};
+
+const compareDimension = <Key extends string>(
+  dimension: ExamBlueprintComparisonDimension,
+  targetBuckets: readonly ExamBlueprintBucketInput<Key>[],
+  currentBuckets: readonly ExamBlueprintCoverageBucketInput<Key>[]
+): readonly ExamBlueprintBucketComparison<Key>[] => {
+  const currentByKey = new Map<Key, { questionCount: number; pointUnits: bigint }>();
+  for (const current of currentBuckets) {
+    const previous = currentByKey.get(current.key);
+    const questionCount = coverageCount(current.currentQuestionCount) + (previous?.questionCount ?? 0);
+    const pointUnits = coveragePointUnits(current.currentPoints) + (previous?.pointUnits ?? 0n);
+    currentByKey.set(current.key, { questionCount, pointUnits });
+  }
+
+  const targetKeys = new Set<Key>();
+  const rows: ExamBlueprintBucketComparison<Key>[] = [];
+  const append = (key: Key, targetQuestionCount: number, targetPointUnits: bigint): void => {
+    const current = currentByKey.get(key);
+    const currentQuestionCount = current?.questionCount ?? 0;
+    const currentPointUnits = current?.pointUnits ?? 0n;
+    const normalizedTargetPoints = coveragePoint(targetPointUnits);
+    const normalizedCurrentPoints = coveragePoint(currentPointUnits);
+    const questionCountDelta = currentQuestionCount - targetQuestionCount;
+    const pointDeltaUnits = currentPointUnits - targetPointUnits;
+    const pointsDelta = coveragePoint(pointDeltaUnits);
+    const status: ExamBlueprintBucketComparisonStatus =
+      questionCountDelta === 0 && pointDeltaUnits === 0n
+        ? 'met'
+        : questionCountDelta < 0 || pointDeltaUnits < 0n
+          ? 'missing'
+          : 'excess';
+    rows.push({
+      key,
+      targetQuestionCount,
+      currentQuestionCount,
+      targetPoints: normalizedTargetPoints,
+      currentPoints: normalizedCurrentPoints,
+      questionCountDelta,
+      pointsDelta,
+      remainingQuestionCount: -questionCountDelta,
+      excessQuestionCount: questionCountDelta,
+      remainingPoints: -pointsDelta,
+      excessPoints: pointsDelta,
+      status,
+      reason: coverageReason(questionCountDelta, pointsDelta)
+    });
+  };
+
+  for (const target of targetBuckets) {
+    targetKeys.add(target.key);
+    append(target.key, target.targetQuestionCount, coveragePointUnits(target.targetPoints));
+  }
+  [...currentByKey.keys()]
+    .filter((key) => !targetKeys.has(key))
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+    .forEach((key) => append(key, 0, 0n));
+  return deepFreeze(rows);
+};
+
+export const compareExamBlueprint = (
+  target: ExamBlueprint,
+  current: ExamBlueprintCurrentCoverageInput
+): ExamBlueprintComparison => {
+  const outcomeBuckets = compareDimension('outcome', target.outcomeBuckets, current.outcomeBuckets);
+  const difficultyBuckets = compareDimension('difficulty', target.difficultyBuckets, current.difficultyBuckets);
+  const questionTypeBuckets = compareDimension('questionType', target.questionTypeBuckets, current.questionTypeBuckets);
+  const dimensions = [
+    { dimension: 'outcome' as const, buckets: outcomeBuckets },
+    { dimension: 'difficulty' as const, buckets: difficultyBuckets },
+    { dimension: 'questionType' as const, buckets: questionTypeBuckets }
+  ] as const;
+  const allRows = [...outcomeBuckets, ...difficultyBuckets, ...questionTypeBuckets];
+  const currentIsEmpty = allRows.every(
+    (row) => row.currentQuestionCount === 0 && row.currentPoints === 0
+  );
+  const allMet = allRows.every((row) => row.status === 'met');
+  const status: ExamBlueprintComparisonAggregateStatus = allMet
+    ? 'valid'
+    : currentIsEmpty
+      ? 'missing'
+      : 'partial';
+  const summary =
+    status === 'valid'
+      ? 'All target count and point constraints are met.'
+      : status === 'missing'
+        ? 'No current coverage is selected; all target buckets are missing.'
+        : 'Current coverage is partial; review each missing or excess reason.';
+  return deepFreeze({
+    status,
+    outcomeBuckets,
+    difficultyBuckets,
+    questionTypeBuckets,
+    dimensions,
+    summary
+  });
+};
+
+export const compareExamBlueprintCoverage = compareExamBlueprint;
