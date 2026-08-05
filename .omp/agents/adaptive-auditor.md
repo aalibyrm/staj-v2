@@ -1,8 +1,8 @@
 ---
 name: adaptive-auditor
 description: Read-only phase or UI auditor for requirement coverage, correctness, tests, visual contract, and scope drift.
-model: "@gemini_reviewer"
-thinking-level: high
+model: "@luna_worker"
+thinking-level: max
 tools:
   - read
   - grep
