@@ -20,7 +20,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | QUESTION-01 | Question types, answers, tags, difficulty, outcome relation | P03 | VERIFIED | P03-W01/W02/W05/P03-REV: immutable entities and guarded server-filtered list/editor workflows cover all six answer shapes and normalized metadata; scoped expected-version bulk changes return deterministic per-item results; the reviewed table and tabbed inspector expose preview, metadata, versions, and priority-column narrow behavior. |
 | QUESTION-02 | Published question versioning | P03 | VERIFIED | P03-W03/W04/P03-REV: expected-version publish/successor operations retain frozen snapshots, reject direct published writes, require normalized change notes, preserve stable identity, and distinguish immutable publication history from the current editable successor in the reviewed version family. |
 | BLUEPRINT-01 | Blueprint distributions and constraints | P04 | VERIFIED | P04-W01/W02: deeply immutable blueprint targets and deterministic validation cover positive overall count/points, non-empty unique outcome/difficulty/type buckets, canonical question enums, independently balanced distributions, typed Reactive Form editing, and target/current matrix comparison with accessible summaries. |
-| BLUEPRINT-02 | Automatic selection and missing coverage | P04 | IN_PROGRESS | P04-W02: deterministic immutable comparison reports target/current counts and points, missing/excess status, unexpected current keys, and exact non-color reasons across all dimensions. P04-W03 automatic selection remains. |
+| BLUEPRINT-02 | Automatic selection and missing coverage | P04 | VERIFIED | P04-W02/W03: deterministic immutable comparison reports exact target/current deficits across all dimensions; pure fixed-point selection searches simultaneous constraints without stable-question reuse, retains pinned published versions, excludes invalid/unmatched candidates, and returns the deterministic best non-exceeding subset with exhaustive unmet reasons when exact coverage is impossible. |
 | SESSION-01 | Timed navigation, marking, autosave, reconnect | P05 | TODO | - |
 | SESSION-02 | Token and one-active-session rule | P05 | TODO | - |
 | GRADING-01 | Objective and rubric grading | P06 | TODO | - |
@@ -65,13 +65,13 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | BR-11 | See 03-business-rules.md BR-11 | P02-P07 | TODO | - |
 | ADV-01 | See 03-business-rules.md ADV-01 | P02/P04/P05/P07 | TODO | - |
 | ADV-02 | See 03-business-rules.md ADV-02 | P02/P04/P05/P07 | TODO | - |
-| ADV-03 | See 03-business-rules.md ADV-03 | P02/P04/P05/P07 | TODO | - |
+| ADV-03 | See 03-business-rules.md ADV-03 | P02/P04/P05/P07 | VERIFIED | P04-W03: deterministic memoized exhaustive search attempts all simultaneous blueprint count/point constraints, groups candidates by stable question identity to prevent reuse across versions, and proves a non-greedy feasible solution when one exists. |
 | ADV-04 | See 03-business-rules.md ADV-04 | P02/P04/P05/P07 | VERIFIED | P02-W04/P02-REV: computed filters, stable tracking, batched lifecycle-lazy Cytoscape updates, bounded one-hop focus/restore, zoom/fit controls, and a semantic list alternative preserve operation for large outcome sets. |
 | ADV-05 | See 03-business-rules.md ADV-05 | P02/P04/P05/P07 | TODO | - |
 | ADV-06 | See 03-business-rules.md ADV-06 | P02/P04/P05/P07 | TODO | - |
 | AC-01 | See 04-acceptance-and-delivery.md AC-01 | P02-P08 | VERIFIED | P02-W03: prospective outcome writes are cycle-checked before entity/course mutation; cyclic saves/publishes return a validation error with the ordered closed outcome-code path. |
 | AC-02 | See 04-acceptance-and-delivery.md AC-02 | P02-P08 | VERIFIED | P03-W04: immutable exam question references pin a specific published QuestionVersion; resolving after successor creation returns the retained prior snapshot while the current question advances to an editable draft. |
-| AC-03 | See 04-acceptance-and-delivery.md AC-03 | P02-P08 | VERIFIED | P04-W01/W02: invalid target constraints are blocked with structured issues and accessible form summaries; `/exams/new` exposes every target/current count and point mismatch with explicit missing/excess text, aggregate valid/partial/missing state, and non-color indicators. |
+| AC-03 | See 04-acceptance-and-delivery.md AC-03 | P02-P08 | VERIFIED | P04-W01/W02/W03: invalid targets are blocked with structured issues; `/exams/new` exposes accessible target/current mismatch summaries; automatic selection returns structured overall and per-outcome/difficulty/type count/point deficits for every unmet constraint. |
 | AC-04 | See 04-acceptance-and-delivery.md AC-04 | P02-P08 | TODO | - |
 | AC-05 | See 04-acceptance-and-delivery.md AC-05 | P02-P08 | TODO | - |
 | AC-06 | See 04-acceptance-and-delivery.md AC-06 | P02-P08 | TODO | - |
