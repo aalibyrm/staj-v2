@@ -6,6 +6,17 @@ import type {
 } from '../../adaptive-learning/models/seed-domain.models';
 
 declare const questionIdBrand: unique symbol;
+declare const questionVersionIdBrand: unique symbol;
+
+export type QuestionVersionId = string & { readonly [questionVersionIdBrand]: 'QuestionVersionId' };
+
+export type QuestionPublishInput = Readonly<{
+  readonly changeNote?: string;
+}>;
+
+export type QuestionSuccessorInput = Readonly<{
+  readonly changeNote: string;
+}>;
 
 export type QuestionId = string & { readonly [questionIdBrand]: 'QuestionId' };
 
@@ -158,6 +169,13 @@ export type Question = Readonly<{
   answer: QuestionAnswer;
 }>;
 
+export type QuestionVersion = Readonly<Question & {
+  readonly questionId: QuestionId;
+  readonly versionId: QuestionVersionId;
+  readonly publishedAt: string;
+  readonly changeNote: string;
+}>;
+
 export interface QuestionListQueryInput {
   readonly search?: unknown;
   readonly course?: unknown;
@@ -218,6 +236,10 @@ export const EMPTY_QUESTION_STATUS_COUNTS: QuestionStatusCounts = Object.freeze(
 });
 
 export const asQuestionId = (value: string): QuestionId => value as QuestionId;
+export const asQuestionVersionId = (value: string): QuestionVersionId => value as QuestionVersionId;
+
+export const questionVersionIdFor = (questionId: QuestionId, version: number): QuestionVersionId =>
+  asQuestionVersionId(`${String(questionId)}-v${String(version)}`);
 export const asCourseId = (value: string): CourseId => value as CourseId;
 export const asLearningOutcomeId = (value: string): LearningOutcomeId => value as LearningOutcomeId;
 

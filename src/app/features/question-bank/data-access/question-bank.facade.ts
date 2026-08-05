@@ -40,6 +40,7 @@ import {
   isQuestionSort,
   questionReferenceFromCourse,
   questionReferenceFromOutcome,
+  questionVersionIdFor,
   type Question,
   type QuestionAnswer,
   type QuestionBankRequestState,
@@ -53,11 +54,14 @@ import {
   type QuestionListResponse,
   type QuestionOption,
   type QuestionOutcomeReference,
+  type QuestionPublishInput,
   type QuestionSort,
   type QuestionStatus,
   type QuestionStatusCounts,
+  type QuestionSuccessorInput,
   type QuestionType,
-  type QuestionUpdateInput
+  type QuestionUpdateInput,
+  type QuestionVersion
 } from '../models/question.models';
 
 const AUTHORIZED_QUESTION_ROLES = Object.freeze(['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const);
@@ -65,6 +69,7 @@ const QUESTIONS_PER_COURSE = 18;
 const MAX_SEARCH_LENGTH = 120;
 const QUESTION_PAGE_SIZE_MAX = 50;
 const QUESTION_PAGE_MAX = MAX_PAGE;
+const DEFAULT_PUBLISH_CHANGE_NOTE = 'Initial publication';
 
 type AuthorizedQuestionRole = (typeof AUTHORIZED_QUESTION_ROLES)[number];
 
@@ -234,6 +239,18 @@ const cloneQuestion = (question: Question): Question => deepFreeze({
   options: question.options.map((option) => ({ ...option })),
   answer: cloneQuestionAnswer(question.answer)
 });
+
+const cloneQuestionVersion = (version: QuestionVersion): QuestionVersion => deepFreeze({
+  ...version,
+  course: { ...version.course },
+  outcome: { ...version.outcome },
+  tags: [...version.tags],
+  options: version.options.map((option) => ({ ...option })),
+  answer: cloneQuestionAnswer(version.answer)
+});
+
+const normalizeChangeNote = (value: unknown, fallback = ''): string =>
+  typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 
 const idSort = (left: { readonly id: string }, right: { readonly id: string }): number =>
   left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
@@ -519,6 +536,7 @@ const freezeResponse = (
 export class QuestionBankRepository {
   private readonly transport: MockTransport;
   private readonly questionEntities = new Map<QuestionId, Question>();
+  private readonly questionVersionEntities = new Map<QuestionId, Map<number, QuestionVersion>>();
   private readonly courseEntities = new Map<string, QuestionCourseReference>();
   private readonly outcomeEntities = new Map<string, QuestionOutcomeReference>();
   private readonly outcomeCourseIds = new Map<string, string>();
@@ -529,7 +547,15 @@ export class QuestionBankRepository {
     this.transport = transport ?? new MockTransport();
     const seed = createQuestionSeedData();
     for (const question of seed.questions) {
-      this.questionEntities.set(question.id, cloneQuestion(question));
+      const retained = cloneQuestion(question);
+      this.questionEntities.set(question.id, retained);
+      if (retained.status === 'published') {
+        this.retainVersionSnapshot(this.createVersionSnapshot(
+          retained,
+          retained.updatedAt,
+          'Seeded published version'
+        ));
+      }
     }
     for (const course of seed.courses) {
       this.courseEntities.set(String(course.id), Object.freeze({ ...course }));
@@ -600,6 +626,43 @@ export class QuestionBankRepository {
   get(id: QuestionId | string, options: QuestionBankRequestOptions = {}): Observable<Question> {
     return this.getQuestion(id, options);
   }
+
+  getQuestionVersionHistory(
+    id: QuestionId | string,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<readonly QuestionVersion[]> {
+    return defer(() => {
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      const request = { method: 'GET' as const, url: `/question-bank/questions/${String(id)}/versions` };
+      if (access === null) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new ApiTransportError('unauthorized', 1);
+          },
+          { ...controls, outcome: 'unauthorized' }
+        ).pipe(map(({ body }) => body));
+      }
+      return this.transport.execute(
+        request,
+        () => {
+          const question = this.questionEntities.get(asQuestionId(String(id)));
+          if (question === undefined || !access.courseIds.includes(String(question.courseId))) {
+            throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.', String(id));
+          }
+          const versions = this.questionVersionEntities.get(question.id);
+          return Object.freeze(
+            [...(versions?.values() ?? [])]
+              .sort((left, right) => left.version - right.version)
+              .map(cloneQuestionVersion)
+          );
+        },
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
 
   listCourseOptions(options: QuestionBankRequestOptions = {}): Observable<readonly QuestionCourseReference[]> {
     return defer(() => {
@@ -734,7 +797,7 @@ export class QuestionBankRepository {
           () => {
             throw new QuestionBankError(
               'not-editable',
-              'Published and archived questions are preview-only here. Create a new version in the later publish workflow.',
+              'Published and archived questions are preview-only here. Create a new version instead of editing the published entity.',
               String(id)
             );
           },
@@ -768,6 +831,104 @@ export class QuestionBankRepository {
     });
   }
 
+  publishQuestion(
+    id: QuestionId | string,
+    input: QuestionPublishInput = {},
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return defer(() => {
+      const requestOptions = options;
+      const note = normalizeChangeNote(input.changeNote, DEFAULT_PUBLISH_CHANGE_NOTE);
+      const access = getAccess(requestOptions);
+      const controls = this.controlsFor(requestOptions);
+      const request = { method: 'POST' as const, url: `/question-bank/questions/${String(id)}/publish`, body: { changeNote: note } };
+      if (access === null) return this.unauthorizedWrite(request, controls);
+      const current = this.questionEntities.get(asQuestionId(String(id)));
+      if (current === undefined) {
+        return this.transport.execute(request, () => {
+          throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.', String(id));
+        }, controls).pipe(map(({ body }) => body));
+      }
+      if (!access.courseIds.includes(String(current.courseId))) return this.unauthorizedWrite(request, controls);
+      this.assertExpectedVersion(current, requestOptions);
+      if (current.status !== 'draft' && current.status !== 'review') {
+        return this.transport.execute(request, () => {
+          throw new QuestionBankError('not-editable', 'Only draft and review questions can be published.', String(id));
+        }, controls).pipe(map(({ body }) => body));
+      }
+      return this.transport.execute(request, () => {
+        const latest = this.questionEntities.get(current.id);
+        if (latest === undefined) throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.', String(id));
+        this.assertExpectedVersion(latest, requestOptions);
+        if (latest.status !== 'draft' && latest.status !== 'review') {
+          throw new QuestionBankError('not-editable', 'Only draft and review questions can be published.', String(id));
+        }
+        const publishedAt = new Date().toISOString();
+        const next = deepFreeze({
+          ...latest,
+          status: 'published' as const,
+          updatedAt: publishedAt
+        }) as Question;
+        this.retainVersionSnapshot(this.createVersionSnapshot(next, publishedAt, note));
+        this.questionEntities.set(next.id, next);
+        return cloneQuestion(next);
+      }, controls).pipe(map(({ body }) => body));
+    });
+  }
+
+  createQuestionSuccessor(
+    id: QuestionId | string,
+    input: QuestionSuccessorInput,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return defer(() => {
+      const requestOptions = options;
+      const note = normalizeChangeNote(input.changeNote);
+      const access = getAccess(requestOptions);
+      const controls = this.controlsFor(requestOptions);
+      const request = { method: 'POST' as const, url: `/question-bank/questions/${String(id)}/successors`, body: { changeNote: note } };
+      if (access === null) return this.unauthorizedWrite(request, controls);
+      if (note.length === 0) {
+        return this.transport.execute(request, () => {
+          throw new QuestionBankError('validation', 'A nonblank change note is required to create a successor.', String(id));
+        }, controls).pipe(map(({ body }) => body));
+      }
+      const current = this.questionEntities.get(asQuestionId(String(id)));
+      if (current === undefined) {
+        return this.transport.execute(request, () => {
+          throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.', String(id));
+        }, controls).pipe(map(({ body }) => body));
+      }
+      if (!access.courseIds.includes(String(current.courseId))) return this.unauthorizedWrite(request, controls);
+      this.assertExpectedVersion(current, requestOptions);
+      if (current.status !== 'published') {
+        return this.transport.execute(request, () => {
+          throw new QuestionBankError('not-editable', 'Only published questions can create an editable successor.', String(id));
+        }, controls).pipe(map(({ body }) => body));
+      }
+      return this.transport.execute(request, () => {
+        const latest = this.questionEntities.get(current.id);
+        if (latest === undefined) throw new QuestionBankError('not-found', 'The selected question is no longer available in this scope.', String(id));
+        this.assertExpectedVersion(latest, requestOptions);
+        if (latest.status !== 'published') {
+          throw new QuestionBankError('not-editable', 'Only published questions can create an editable successor.', String(id));
+        }
+        if (this.questionVersionEntities.get(latest.id)?.has(latest.version) !== true) {
+          this.retainVersionSnapshot(this.createVersionSnapshot(latest, latest.updatedAt, 'Published version'));
+        }
+        const next = deepFreeze({
+          ...latest,
+          status: 'draft' as const,
+          updatedAt: new Date().toISOString(),
+          version: latest.version + 1
+        }) as Question;
+        this.questionEntities.set(next.id, next);
+        return cloneQuestion(next);
+      }, controls).pipe(map(({ body }) => body));
+    });
+  }
+
+
   setMockScenario(controls: Partial<MockScenarioControls>): void {
     if (!isRecord(controls)) {
       throw new TypeError('Mock scenario controls must be an object.');
@@ -787,10 +948,39 @@ export class QuestionBankRepository {
     return Object.freeze({ ...this.scenarioControls });
   }
 
-  getSnapshot(): Readonly<{ readonly questions: readonly Question[] }> {
+  getSnapshot(): Readonly<{
+    readonly questions: readonly Question[];
+    readonly versions: readonly QuestionVersion[];
+  }> {
+    const versions: QuestionVersion[] = [];
+    for (const history of this.questionVersionEntities.values()) {
+      versions.push(...history.values());
+    }
+    versions.sort((left, right) => left.versionId < right.versionId ? -1 : left.versionId > right.versionId ? 1 : 0);
     return Object.freeze({
-      questions: Object.freeze([...this.questionEntities.values()].map(cloneQuestion))
+      questions: Object.freeze([...this.questionEntities.values()].map(cloneQuestion)),
+      versions: Object.freeze(versions.map(cloneQuestionVersion))
     });
+  }
+
+  private createVersionSnapshot(
+    question: Question,
+    publishedAt: string,
+    changeNote: string
+  ): QuestionVersion {
+    return cloneQuestionVersion({
+      ...question,
+      questionId: question.id,
+      versionId: questionVersionIdFor(question.id, question.version),
+      publishedAt,
+      changeNote: normalizeChangeNote(changeNote, DEFAULT_PUBLISH_CHANGE_NOTE)
+    } as QuestionVersion);
+  }
+
+  private retainVersionSnapshot(snapshot: QuestionVersion): void {
+    const history = this.questionVersionEntities.get(snapshot.questionId) ?? new Map<number, QuestionVersion>();
+    history.set(snapshot.version, snapshot);
+    this.questionVersionEntities.set(snapshot.questionId, history);
   }
 
   private buildListResponse(
@@ -1128,6 +1318,7 @@ export class QuestionBankFacade {
   private readonly writableCourseOptions = signal<readonly QuestionCourseReference[]>([]);
   private readonly writableOutcomeOptions = signal<readonly QuestionOutcomeReference[]>([]);
   private readonly writableSaveRequestState = signal<QuestionBankSaveRequestState>({ status: 'idle' });
+  private readonly writableVersionHistory = signal<readonly QuestionVersion[]>([]);
   private lastQuery: QuestionListQuery = normalizeQuestionListQuery();
 
   readonly requestState: Signal<QuestionBankRequestState> = this.writableRequestState.asReadonly();
@@ -1141,6 +1332,7 @@ export class QuestionBankFacade {
   readonly outcomeOptions: Signal<readonly QuestionOutcomeReference[]> = this.writableOutcomeOptions.asReadonly();
   readonly saveRequestState: Signal<QuestionBankSaveRequestState> = this.writableSaveRequestState.asReadonly();
   readonly saveState: Signal<QuestionBankSaveRequestState> = this.saveRequestState;
+  readonly versionHistory: Signal<readonly QuestionVersion[]> = this.writableVersionHistory.asReadonly();
   readonly saveFeedback = computed(() => this.saveRequestState().message ?? '');
   readonly editorReferences = computed<QuestionEditorReferenceData>(() => ({
     courses: this.courseOptions(),
@@ -1298,6 +1490,59 @@ export class QuestionBankFacade {
     }));
   }
 
+  publishQuestion(
+    id: QuestionId | string,
+    input: QuestionPublishInput = {},
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return this.writeQuestion(
+      () => this.repository.publishQuestion(id, input, {
+        ...this.sessionOptions(),
+        ...options
+      }),
+      'Question published successfully.'
+    );
+  }
+
+  createQuestionSuccessor(
+    id: QuestionId | string,
+    input: QuestionSuccessorInput,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<Question> {
+    return this.writeQuestion(
+      () => this.repository.createQuestionSuccessor(id, input, {
+        ...this.sessionOptions(),
+        ...options
+      }),
+      'New editable question version created successfully.'
+    );
+  }
+
+
+  getQuestionVersionHistory(
+    id: QuestionId | string,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<readonly QuestionVersion[]> {
+    return defer(() => this.repository.getQuestionVersionHistory(id, {
+      ...this.sessionOptions(),
+      ...options
+    }));
+  }
+
+  loadQuestionVersionHistory(
+    id: QuestionId | string,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<readonly QuestionVersion[]> {
+    return this.getQuestionVersionHistory(id, options).pipe(
+      tap((history) => this.writableVersionHistory.set(history)),
+      catchError((error: unknown) => {
+        this.writableVersionHistory.set([]);
+        return throwError(() => error);
+      })
+    );
+  }
+
+
   setMockScenario(controls: Partial<MockScenarioControls>): void {
     this.repository.setMockScenario(controls);
   }
@@ -1306,15 +1551,19 @@ export class QuestionBankFacade {
     this.repository.resetMockScenario();
   }
 
-  private writeQuestion(factory: () => Observable<Question>): Observable<Question> {
+  private writeQuestion(
+    factory: () => Observable<Question>,
+    successMessage = 'Question saved successfully.'
+  ): Observable<Question> {
+    const previousSelected = this.writableSelectedQuestion();
     this.writableSaveRequestState.set({ status: 'saving' });
     return defer(factory).pipe(
       tap((question) => {
         this.setSelectedQuestion(question);
-        this.mergeSavedQuestion(question);
+        this.mergeSavedQuestion(question, previousSelected);
         this.writableSaveRequestState.set({
           status: 'success',
-          message: 'Question saved successfully.',
+          message: successMessage,
           questionId: question.id
         });
       }),
@@ -1345,14 +1594,16 @@ export class QuestionBankFacade {
     this.writableSelectionNotice.set('');
   }
 
-  private mergeSavedQuestion(question: Question): void {
+  private mergeSavedQuestion(question: Question, selectedBeforeSave: Question | null = null): void {
     const current = this.writablePageResult();
     if (current === null) {
       return;
     }
     const query = current.query;
     const existingIndex = current.items.findIndex((item) => item.id === question.id);
-    const previous = existingIndex < 0 ? undefined : current.items[existingIndex];
+    const previous = existingIndex < 0
+      ? selectedBeforeSave?.id === question.id ? selectedBeforeSave : undefined
+      : current.items[existingIndex];
     const beforeIncluded = previous !== undefined && this.matchesListQuery(previous, query);
     const afterIncluded = this.matchesListQuery(question, query);
     const pageItems = [...current.items];

@@ -265,6 +265,17 @@ class DeterministicQuestionBankFacade {
   });
 
   readonly loadCourseOptions = vi.fn(() => of(this.courseOptions()));
+  readonly versionHistory = signal<readonly { readonly versionId: string; readonly version: number; readonly publishedAt: string; readonly changeNote: string }[]>([]);
+  readonly saveRequestState = signal({ status: 'idle' as const });
+  readonly saveFeedback = signal('');
+  readonly loadQuestionVersionHistory = vi.fn((_id: QuestionId): Observable<readonly never[]> => of([]));
+  readonly publishQuestion = vi.fn((_id: QuestionId, _input: unknown, _options: unknown): Observable<Question> => of(testQuestion));
+  readonly createQuestionSuccessor = vi.fn((_id: QuestionId, _input: unknown, _options: unknown): Observable<Question> => {
+    const draft = { ...testQuestion, status: 'draft' as const, version: testQuestion.version + 1 };
+    this.selectedId.set(draft.id);
+    this.selectedQuestion.set(draft);
+    return of(draft);
+  });
 }
 
 const queryParamMap = (values: Readonly<Record<string, string>>): ParamMap => ({
@@ -412,5 +423,31 @@ describe('QuestionBankComponent', () => {
     expect(fixture.componentInstance.total()).toBe(1);
     expect(fixture.componentInstance.statusTotal()).toBe(10);
     expect(allCount).toBe('10');
+  });
+  it('publishes an editable question and announces success without changing URL query state', () => {
+    const fixture = create({ search: 'behavior', selected: testQuestion.id });
+    const draft = { ...testQuestion, status: 'draft' as const };
+    fixture.componentInstance.workflowPending.set(true);
+    fixture.componentInstance.publishQuestion(draft);
+    expect(facade.publishQuestion).not.toHaveBeenCalled();
+    fixture.componentInstance.workflowPending.set(false);
+    fixture.componentInstance.publishQuestion(draft);
+    expect(facade.publishQuestion).toHaveBeenCalledWith(draft.id, {}, { expectedVersion: draft.version });
+    expect(fixture.componentInstance.workflowPending()).toBe(false);
+    expect(fixture.componentInstance.workflowFeedback()).toContain('published successfully');
+    expect(routeValues).toEqual({ search: 'behavior', selected: testQuestion.id });
+  });
+
+  it('hands a published successor to the existing editor with normalized note', () => {
+    const fixture = create({ selected: testQuestion.id });
+    fixture.componentInstance.successorForm.controls.changeNote.setValue('  clarify evidence  ');
+    fixture.componentInstance.createSuccessor(testQuestion);
+    expect(facade.createQuestionSuccessor).toHaveBeenCalledWith(
+      testQuestion.id,
+      { changeNote: 'clarify evidence' },
+      { expectedVersion: testQuestion.version }
+    );
+    expect(fixture.componentInstance.editorOpen()).toBe(true);
+    expect(fixture.componentInstance.editingQuestionId()).toBe(testQuestion.id);
   });
 });

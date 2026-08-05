@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal, type OnInit } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, type ParamMap } from '@angular/router';
-import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
+import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { EMPTY, Subject, catchError, debounceTime, distinctUntilChanged, of, switchMap, tap } from 'rxjs';
 
 import { RequestStateComponent } from '../../../shared/components/request-state.component';
@@ -20,7 +20,8 @@ import type {
   QuestionId,
   QuestionListQuery,
   QuestionStatus,
-  QuestionType
+  QuestionType,
+  QuestionVersion
 } from '../models/question.models';
 import { QuestionEditorComponent } from './question-editor.component';
 
@@ -124,9 +125,30 @@ const FILTER_DEFAULTS = {
             <div class="inspector-id"><strong>{{ selected.id }}</strong><span class="table-badge status-badge"><span aria-hidden="true">{{ statusIcon(selected.status) }}</span> {{ statusLabel(selected.status) }}</span></div>
             <section class="preview-block"><h3>Preview</h3><p class="question-stem">{{ selected.stem }}</p><ol *ngIf="selected.options.length > 0" class="answer-options"><li *ngFor="let option of selected.options; trackBy: trackByOptionId">{{ option.label }}</li></ol><p class="answer-note"><strong>Answer representation:</strong> {{ answerLabel(selected) }}</p><p class="explanation"><strong>Explanation:</strong> {{ selected.explanation }}</p></section>
             <div class="inspector-actions">
-              <button *ngIf="isEditable(selected)" type="button" class="primary-button" (click)="startEditQuestion(selected)">Edit question</button>
-              <p *ngIf="!isEditable(selected)" class="non-editable-note">Preview only. Published and archived questions require version creation in the later publish workflow.</p>
+              <button *ngIf="isEditable(selected)" type="button" class="primary-button" [disabled]="workflowPending()" (click)="startEditQuestion(selected)">Edit question</button>
+              <button *ngIf="isEditable(selected)" type="button" class="primary-button" [disabled]="workflowPending()" (click)="publishQuestion(selected)">{{ workflowPending() ? 'Publishing…' : 'Publish' }}</button>
+              <p *ngIf="selected.status === 'archived'" class="non-editable-note">Preview only. Archived questions cannot be edited or versioned.</p>
+              <p *ngIf="workflowFeedback()" class="workflow-feedback" [class.workflow-feedback--success]="workflowFeedbackKind() === 'success'" role="alert" aria-live="assertive">{{ workflowFeedback() }}</p>
             </div>
+              <ng-container *ngIf="selected.status === 'published'">
+                <section class="version-history" aria-labelledby="question-version-history-heading">
+                  <h3 id="question-version-history-heading">Immutable version history</h3>
+                  <ol *ngIf="versionHistory().length > 0; else noVersionHistory">
+                    <li *ngFor="let version of versionHistory(); trackBy: trackByVersionId">
+                      <strong>v{{ version.version }}</strong>
+                      <time [attr.datetime]="version.publishedAt">{{ version.publishedAt | date:'dd MMM yyyy, HH:mm' }}</time>
+                      <span>{{ version.changeNote }}</span>
+                    </li>
+                  </ol>
+                  <ng-template #noVersionHistory><p>No retained publication snapshots.</p></ng-template>
+                </section>
+                <form class="successor-form" [formGroup]="successorForm" (ngSubmit)="createSuccessor(selected)">
+                  <label for="question-change-note">Change note <span aria-hidden="true">*</span></label>
+                  <textarea id="question-change-note" formControlName="changeNote" rows="3" [attr.aria-invalid]="successorForm.controls.changeNote.invalid && successorAttempted() ? 'true' : null"></textarea>
+                  <p *ngIf="successorAttempted() && successorForm.controls.changeNote.invalid" class="field-error">Enter a nonblank change note.</p>
+                  <button type="submit" class="primary-button" [disabled]="workflowPending()">{{ workflowPending() ? 'Creating…' : 'Create editable successor' }}</button>
+                </form>
+              </ng-container>
             <section class="metadata-block"><h3>Metadata</h3><dl><dt>Course</dt><dd>{{ selected.course.code }} · {{ selected.course.title }}</dd><dt>Outcome</dt><dd>{{ selected.outcome.code }} · {{ selected.outcome.title }}</dd><dt>Type</dt><dd>{{ typeLabel(selected.type) }}</dd><dt>Grade</dt><dd>{{ gradeLabel(selected.grade) }}</dd><dt>Difficulty</dt><dd>{{ difficultyLabel(selected.difficulty) }}</dd><dt>Points</dt><dd>{{ selected.points }}</dd><dt>Version</dt><dd>v{{ selected.version }} · immutable</dd><dt>Created</dt><dd><time [attr.datetime]="selected.createdAt">{{ selected.createdAt | date:'dd MMM yyyy' }}</time></dd><dt>Updated</dt><dd><time [attr.datetime]="selected.updatedAt">{{ selected.updatedAt | date:'dd MMM yyyy, HH:mm' }}</time></dd></dl><div class="tag-list" aria-label="Question tags"><span *ngFor="let tag of selected.tags" class="tag">#{{ tag }}</span></div></section>
           </ng-container>
           <ng-template #noSelection><div class="inspector-empty"><span aria-hidden="true">⌁</span><h3>Select a question</h3><p>Choose one row to preview its current immutable content and metadata.</p></div></ng-template>
@@ -229,6 +251,11 @@ export class QuestionBankComponent implements OnInit {
   readonly totalPages = computed(() => this.facade.pageResult()?.totalPages ?? 0);
   readonly pageNumbers = computed(() => Array.from({ length: Math.min(this.totalPages(), 7) }, (_, index) => index + 1));
   readonly liveMessage = signal('');
+  readonly workflowFeedback = signal('');
+  readonly workflowFeedbackKind = signal<'success' | 'error' | 'conflict' | 'unauthorized'>('success');
+  readonly workflowPending = signal(false);
+  readonly successorAttempted = signal(false);
+  readonly versionHistory = computed<readonly QuestionVersion[]>(() => this.facade.versionHistory());
   readonly statuses = QUESTION_STATUSES;
   readonly types = QUESTION_TYPES;
   readonly difficulties = QUESTION_DIFFICULTIES;
@@ -242,6 +269,12 @@ export class QuestionBankComponent implements OnInit {
     status: new FormControl('', { nonNullable: true }),
     type: new FormControl('', { nonNullable: true }),
     sort: new FormControl('updatedAt-desc', { nonNullable: true })
+  });
+  readonly successorForm = new FormGroup({
+    changeNote: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.pattern(/\S/)]
+    })
   });
 
   ngOnInit(): void {
@@ -264,6 +297,8 @@ export class QuestionBankComponent implements OnInit {
         this.selectedRouteIdSignal.set(null);
         this.liveMessage.set(this.facade.selectionNotice() || 'Selection cleared because the question is missing or stale.');
         this.syncUrl(this.activeQuerySignal(), null);
+      } else if (selected !== null) {
+        this.loadVersionHistory(selected.id);
       }
     });
     this.selectionRequests.pipe(
@@ -276,6 +311,7 @@ export class QuestionBankComponent implements OnInit {
         this.syncUrl(this.activeQuerySignal(), null);
       } else if (selected !== null) {
         this.liveMessage.set(`Previewing ${selected.id}.`);
+        this.loadVersionHistory(selected.id);
       }
     });
     this.route.queryParamMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((params) => this.applyQueryParams(params));
@@ -305,6 +341,63 @@ export class QuestionBankComponent implements OnInit {
     this.selectedRouteIdSignal.set(id);
     this.syncUrl(this.activeQuerySignal(), id);
     this.selectionRequests.next(id);
+  }
+
+  publishQuestion(question: Question): void {
+    if (!this.isEditable(question) || this.workflowPending()) return;
+    this.workflowPending.set(true);
+    this.workflowFeedback.set('');
+    this.liveMessage.set(`Publishing ${question.id}.`);
+    this.facade.publishQuestion(question.id, {}, { expectedVersion: question.version }).pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe({
+      next: (published) => {
+        this.workflowPending.set(false);
+        this.workflowFeedbackKind.set('success');
+        this.workflowFeedback.set('Question published successfully.');
+        this.liveMessage.set(`${published.id} published successfully.`);
+        this.selectQuestion(published.id);
+        this.loadVersionHistory(published.id);
+      },
+      error: (error: unknown) => {
+        this.workflowPending.set(false);
+        this.setWorkflowError(error);
+      }
+    });
+  }
+
+  createSuccessor(question: Question): void {
+    this.successorAttempted.set(true);
+    this.successorForm.markAllAsTouched();
+    if (this.workflowPending()) return;
+    const note = this.successorForm.controls.changeNote.value.trim();
+    if (this.successorForm.invalid || note.length === 0) {
+      this.workflowFeedbackKind.set('error');
+      this.workflowFeedback.set('Enter a nonblank change note before creating a successor.');
+      this.liveMessage.set(this.workflowFeedback());
+      return;
+    }
+    this.workflowPending.set(true);
+    this.workflowFeedback.set('');
+    this.facade.createQuestionSuccessor(question.id, { changeNote: note }, { expectedVersion: question.version }).pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe({
+      next: (draft) => {
+        this.workflowPending.set(false);
+        this.successorAttempted.set(false);
+        this.successorForm.reset();
+        this.editorOpen.set(true);
+        this.editingQuestionId.set(draft.id);
+        this.workflowFeedbackKind.set('success');
+        this.workflowFeedback.set('New editable successor created.');
+        this.liveMessage.set(`${draft.id} opened as an editable successor.`);
+        this.selectQuestion(draft.id);
+      },
+      error: (error: unknown) => {
+        this.workflowPending.set(false);
+        this.setWorkflowError(error);
+      }
+    });
   }
 
   startNewQuestion(): void {
@@ -343,6 +436,29 @@ export class QuestionBankComponent implements OnInit {
 
   isEditable(question: Question): boolean {
     return question.status === 'draft' || question.status === 'review';
+  }
+  trackByVersionId(_index: number, version: QuestionVersion): string { return version.versionId; }
+
+  private loadVersionHistory(id: QuestionId): void {
+    this.facade.loadQuestionVersionHistory(id).pipe(
+      catchError((error: unknown) => {
+        this.setWorkflowError(error);
+        return of([] as readonly QuestionVersion[]);
+      }),
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe();
+  }
+
+  private setWorkflowError(error: unknown): void {
+    const saveState = this.facade.saveRequestState();
+    const status = saveState.status;
+    this.workflowFeedbackKind.set(
+      status === 'conflict' ? 'conflict' : status === 'unauthorized' ? 'unauthorized' : 'error'
+    );
+    this.workflowFeedback.set(
+      error instanceof Error ? error.message : this.facade.saveFeedback() || 'Question workflow request failed.'
+    );
+    this.liveMessage.set(this.workflowFeedback());
   }
 
   trackByQuestionId(_index: number, question: Question): QuestionId { return question.id; }

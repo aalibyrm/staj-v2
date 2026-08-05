@@ -18,7 +18,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | CONTENT-01 | Content metadata and access conditions | P02 | VERIFIED | P02-W01/W05/P02-REV: immutable metadata plus repository-side public/enrollment/outcome/role/availability enforcement, explicit management mode, server-filtered catalog, and fail-closed list/direct reads verified. |
 | CONTENT-02 | Rule-based learning sequence | P02 | VERIFIED | P02-W01/W06/P02-REV: immutable path contracts/CRUD plus deterministic weakest-first recommendation, structured weak/strong/new-content reasons, semantic tie-breaks, completed/locked exclusion, and inspector consumption verified. |
 | QUESTION-01 | Question types, answers, tags, difficulty, outcome relation | P03 | VERIFIED | P03-W01/W02: immutable entities and guarded server-filtered list/inspector now pair with a draft/review editor covering all six type-specific answer shapes, normalized metadata, course/outcome validation, preview, and immutable scoped create/update operations. |
-| QUESTION-02 | Published question versioning | P03 | TODO | - |
+| QUESTION-02 | Published question versioning | P03 | VERIFIED | P03-W03: scoped expected-version publish and successor operations retain frozen published snapshots, reject direct published writes, require normalized change notes, preserve stable question identity while incrementing editable versions, and leave entity/history state unchanged on failures. |
 | BLUEPRINT-01 | Blueprint distributions and constraints | P04 | TODO | - |
 | BLUEPRINT-02 | Automatic selection and missing coverage | P04 | TODO | - |
 | SESSION-01 | Timed navigation, marking, autosave, reconnect | P05 | TODO | - |
@@ -38,7 +38,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | TECH-07 | See 02-architecture-and-technical.md TECH-07 | P00-P08 | TODO | - |
 | TECH-08 | See 02-architecture-and-technical.md TECH-08 | P00-P08 | TODO | - |
 | TECH-09 | See 02-architecture-and-technical.md TECH-09 | P00-P08 | IN_PROGRESS | P02-W01/W02/W04/W05/P02-REV: normalized keyed state, memoized tracked filters, lazy routes, batched graph replacement, bounded one-hop graph focus/restore, server-like content requests, stale cancellation, and bounded catalog rows verified; later large feature lists remain. |
-| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00/P01/P02/P02-REV/P03-W01/W02: 156 passing tests cover foundations, authorization/scope, learning repositories/stores/editors, graph and recommendation rules, fail-closed access, guarded routes, question list/query/selection, editor validators/type serialization, immutable scoped writes, conflicts, and failed-write preservation; later business rules remain. |
+| TECH-10 | See 02-architecture-and-technical.md TECH-10 | P00-P08 | IN_PROGRESS | P00/P01/P02/P02-REV/P03-W01-W03: 163 passing tests cover foundations, authorization/scope, learning repositories/stores/editors, graph and recommendation rules, guarded question list/editor workflows, immutable publication snapshots, successor versioning, conflict/failure atomicity, and filtered count invariants; later business rules remain. |
 | TECH-11 | See 02-architecture-and-technical.md TECH-11 | P00-P08 | TODO | - |
 | TECH-12 | See 02-architecture-and-technical.md TECH-12 | P00-P08 | IN_PROGRESS | P01-W03/W04/P01-REV/P02-W02/W04/W05/P02-REV: shell and learning screens provide keyboard-native controls, focus/live feedback, graph focus/restore, ARIA request semantics, non-color cues, and semantic alternatives; later feature screens remain. |
 | TECH-13 | See 02-architecture-and-technical.md TECH-13 | P00-P08 | IN_PROGRESS | P01-W03/W04/P01-REV/P02-W04/W05/P02-REV: reference-aligned shell and learning screens passed 1440x900 desktop plus 390x844 narrow gates; the reviewed outcome map had no narrow page overflow and defaulted to its list alternative. |
@@ -53,7 +53,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | CMP-07 | See 02-architecture-and-technical.md CMP-07 | P02-P07 | TODO | - |
 | CMP-08 | See 02-architecture-and-technical.md CMP-08 | P02-P07 | TODO | - |
 | BR-01 | See 03-business-rules.md BR-01 | P02-P07 | VERIFIED | P02-W03: pure deterministic graph validation and repository create/update enforcement reject self, disconnected, and multi-node prerequisite cycles before mutation with a closed path. |
-| BR-02 | See 03-business-rules.md BR-02 | P02-P07 | TODO | - |
+| BR-02 | See 03-business-rules.md BR-02 | P02-P07 | VERIFIED | P03-W02/W03: existing update paths reject published/archived entities; published edits require a nonblank change note and atomically create a same-identity, incremented draft successor while retaining immutable publication history. |
 | BR-03 | See 03-business-rules.md BR-03 | P02-P07 | TODO | - |
 | BR-04 | See 03-business-rules.md BR-04 | P02-P07 | TODO | - |
 | BR-05 | See 03-business-rules.md BR-05 | P02-P07 | TODO | - |
