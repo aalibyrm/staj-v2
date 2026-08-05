@@ -1,6 +1,7 @@
 import { firstValueFrom } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { createAnswerDraft } from '../models/answer-draft.models';
 import type { ExamSession, ExamSessionState } from '../models/exam-session.models';
 import {
   ExamSessionRepository,
@@ -224,6 +225,128 @@ describe('ExamSessionRepository', () => {
     });
     expect(repository.getSnapshot()).toEqual(before);
   });
+  it('saves immutable versioned drafts by id or token and hydrates them', async () => {
+    const repository = repositoryWithSources({ referenceTimes: ['saved-at-1'] });
+    const session = await firstValueFrom(repository.open(openInput()));
+    const draft = createAnswerDraft('question-a', 'answer');
+
+    const saved = await firstValueFrom(repository.saveDraft(session.routeToken, 'question-a', draft, {
+      expectedVersion: 0,
+      latencyMs: 1
+    }));
+    const hydrated = await firstValueFrom(repository.listDrafts(session.id));
+
+    expect(saved).toMatchObject({ questionId: 'question-a', value: 'answer', version: 1, savedAt: 'saved-at-1' });
+    expect(Object.isFrozen(saved)).toBe(true);
+    expect(hydrated).toEqual([saved]);
+    expect(Object.isFrozen(hydrated)).toBe(true);
+    await expect(firstValueFrom(repository.saveDraft(session.id, 'question-a', draft, { expectedVersion: 0 }))).rejects.toMatchObject({
+      code: 'conflict',
+      reason: 'stale-version'
+    });
+  });
+
+  it('retries one transient service failure and commits one persisted version increment', async () => {
+    vi.useFakeTimers();
+    try {
+      const referenceTimeSource = vi.fn(() => 'saved-at-1');
+      const repository = new ExamSessionRepository({
+        idSource: sequence('session-1'),
+        tokenSource: sequence('token-1'),
+        referenceTimeSource
+      });
+      const session = await firstValueFrom(repository.open(openInput({ referenceTime: 'session-reference' })));
+      repository.setMockScenario({
+        outcome: 'service-error',
+        transientServiceFailures: 1,
+        retryLimit: 1,
+        latencyMs: 10,
+        retryDelayMs: 5
+      });
+
+      const pending = firstValueFrom(repository.saveDraft(
+        session.id,
+        'question-a',
+        createAnswerDraft('question-a', 'answer'),
+        { expectedVersion: 0 }
+      ));
+      await vi.advanceTimersByTimeAsync(25);
+      const saved = await pending;
+
+      expect(saved).toMatchObject({ questionId: 'question-a', value: 'answer', version: 1, savedAt: 'saved-at-1' });
+      expect(referenceTimeSource).toHaveBeenCalledTimes(1);
+      expect(repository.getSnapshot().drafts).toEqual([{
+        sessionId: session.id,
+        drafts: [saved]
+      }]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['nan', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['unsafe', Number.MAX_SAFE_INTEGER + 1],
+    ['string', '0']
+  ] as const)('rejects %s expectedVersion without mutating persisted drafts', async (_label, expectedVersion) => {
+    const repository = repositoryWithSources();
+    const session = await firstValueFrom(repository.open(openInput()));
+    const before = repository.getSnapshot();
+
+    await expect(firstValueFrom(repository.saveDraft(
+      session.id,
+      'question-a',
+      createAnswerDraft('question-a', 'answer'),
+      { expectedVersion: expectedVersion as number }
+    ))).rejects.toMatchObject({ code: 'validation' });
+    expect(repository.getSnapshot()).toEqual(before);
+  });
+
+  it('rejects a draft question mismatch without mutating persisted drafts', async () => {
+    const repository = repositoryWithSources();
+    const session = await firstValueFrom(repository.open(openInput()));
+    const before = repository.getSnapshot();
+
+    await expect(firstValueFrom(repository.saveDraft(
+      session.id,
+      'question-a',
+      createAnswerDraft('question-b', 'answer'),
+      { expectedVersion: 0 }
+    ))).rejects.toMatchObject({ code: 'validation' });
+    expect(repository.getSnapshot()).toEqual(before);
+  });
+
+  it('rejects a draft version mismatch without mutating persisted drafts', async () => {
+    const repository = repositoryWithSources();
+    const session = await firstValueFrom(repository.open(openInput()));
+    const before = repository.getSnapshot();
+
+    await expect(firstValueFrom(repository.saveDraft(
+      session.id,
+      'question-a',
+      createAnswerDraft('question-a', 'answer', false, 1),
+      { expectedVersion: 0 }
+    ))).rejects.toMatchObject({ code: 'conflict', reason: 'stale-version' });
+    expect(repository.getSnapshot()).toEqual(before);
+  });
+
+  it('does not mutate persisted drafts on terminal transport failure', async () => {
+    const repository = repositoryWithSources({ referenceTimes: ['saved-at-1'] });
+    const session = await firstValueFrom(repository.open(openInput()));
+    const before = repository.getSnapshot();
+    repository.setMockScenario({ outcome: 'service-error', retryLimit: 0 });
+
+    await expect(firstValueFrom(repository.saveDraft(session.id, 'question-a', createAnswerDraft('question-a', 'answer'), {
+      expectedVersion: 0
+    }))).rejects.toMatchObject({ kind: 'service' });
+    expect(repository.getSnapshot()).toEqual(before);
+  });
+
 
   it('rejects blank generated identity sources without mutating repository state', async () => {
     const repository = repositoryWithSources({ ids: [' '], tokens: ['token-1'] });

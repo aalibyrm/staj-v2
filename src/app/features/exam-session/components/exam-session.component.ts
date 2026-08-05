@@ -54,9 +54,13 @@ import type { ExamQuestion } from '../models/answer-draft.models';
                 {{ formatDuration(facade.timer()?.remainingMs ?? 0) }}
               </strong>
             </div>
-            <div class="status-item" role="status" aria-live="polite">
+            <div class="status-item">
               <span class="status-label">Draft status</span>
               <strong>{{ facade.localDraftStatus() === 'local' ? 'Local draft only' : 'No answers yet' }}</strong>
+              <span class="autosave-indicator" role="status" aria-live="polite" aria-atomic="true">{{ autosaveLabel() }}</span>
+              @if (facade.autosaveState().status === 'error' && facade.autosaveState().retryable) {
+                <button type="button" class="secondary-action" aria-label="Retry autosave" (click)="retryAutosave()">Retry</button>
+              }
             </div>
           </div>
         </header>
@@ -360,6 +364,21 @@ export class ExamSessionComponent {
     if (routeToken.length === 0 || this.loadedRouteToken === routeToken) return;
     this.loadedRouteToken = routeToken;
     this.facade.load(routeToken).subscribe({ error: () => undefined });
+  }
+  ngOnDestroy(): void {
+    this.facade.ngOnDestroy();
+  }
+
+  retryAutosave(): void {
+    this.facade.retryAutosave();
+  }
+
+  autosaveLabel(): string {
+    const state = this.facade.autosaveState();
+    if (state.status === 'saving') return 'Saving';
+    if (state.status === 'saved') return state.savedAt === null ? 'Saved' : `Saved ${state.savedAt}`;
+    if (state.status === 'error') return state.message.trim().length > 0 ? `Error: ${state.message}` : 'Error';
+    return '';
   }
 
   retry(): void {

@@ -34,6 +34,13 @@ export type AnswerDraft = Readonly<{
   readonly value: AnswerValue;
   readonly answered: boolean;
   readonly flagged: boolean;
+  readonly version: number;
+  readonly savedAt: string | null;
+}>;
+
+export type AnswerDraftPersistenceInput = Readonly<{
+  readonly version?: number;
+  readonly savedAt?: string | null;
 }>;
 
 export type AnswerDraftMap = Readonly<Record<string, AnswerDraft>>;
@@ -49,9 +56,51 @@ export type ExamProgress = Readonly<{
 const nonblank = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
-const freezeAnswerValue = (value: AnswerValue): AnswerValue => {
-  if (Array.isArray(value)) return Object.freeze([...value.map((item) => String(item))]);
+const normalizeDraftVersion = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error('Answer draft version must be a nonnegative safe integer.');
+  }
   return value;
+};
+
+const normalizeSavedAt = (value: unknown): string | null => {
+  if (value === undefined || value === null) return null;
+  if (!nonblank(value)) throw new Error('Answer draft savedAt must be null or a nonblank string.');
+  return value.trim();
+};
+
+const freezeAnswerValue = (value: AnswerValue): AnswerValue => {
+  if (Array.isArray(value)) {
+    const source = value as readonly unknown[];
+    if (source.some((item) => {
+      if (typeof item === 'number') return !Number.isFinite(item);
+      return typeof item !== 'string' && typeof item !== 'boolean';
+    })) {
+      throw new Error('Answer draft array values must be strings, numbers, or booleans.');
+    }
+    return Object.freeze(source.map((item) => String(item)));
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw new Error('Answer draft value has an unsupported type.');
+};
+
+const normalizeDraftPersistence = (
+  versionOrPersistence: number | AnswerDraftPersistenceInput | undefined,
+  savedAt: string | null | undefined
+): Readonly<{ readonly version: number; readonly savedAt: string | null }> => {
+  if (versionOrPersistence !== undefined && typeof versionOrPersistence !== 'number' &&
+    (versionOrPersistence === null || typeof versionOrPersistence !== 'object' || Array.isArray(versionOrPersistence))) {
+    throw new Error('Answer draft persistence must be a version number or object.');
+  }
+  const source = typeof versionOrPersistence === 'object' && versionOrPersistence !== null
+    ? versionOrPersistence
+    : undefined;
+  const version = normalizeDraftVersion(source?.version ?? versionOrPersistence ?? 0);
+  return Object.freeze({
+    version,
+    savedAt: normalizeSavedAt(source?.savedAt ?? savedAt ?? null)
+  });
 };
 
 export const isAnswerValueProvided = (value: AnswerValue | undefined): boolean => {
@@ -85,28 +134,47 @@ export const createExamQuestion = (input: ExamQuestionInput): ExamQuestion => {
   });
 };
 
-export const createAnswerDraft = (
+export function createAnswerDraft(
+  questionId: ExamQuestionId | string,
+  value?: AnswerValue,
+  flagged?: boolean,
+  version?: number,
+  savedAt?: string | null
+): AnswerDraft;
+export function createAnswerDraft(
+  questionId: ExamQuestionId | string,
+  value?: AnswerValue,
+  flagged?: boolean,
+  persistence?: AnswerDraftPersistenceInput
+): AnswerDraft;
+export function createAnswerDraft(
   questionId: ExamQuestionId | string,
   value: AnswerValue = null,
-  flagged = false
-): AnswerDraft => {
+  flagged = false,
+  versionOrPersistence: number | AnswerDraftPersistenceInput = 0,
+  savedAt: string | null = null
+): AnswerDraft {
   if (!nonblank(questionId)) throw new Error('Answer draft questionId must be nonblank.');
+  if (typeof flagged !== 'boolean') throw new Error('Answer draft flagged must be a boolean.');
+  const persistence = normalizeDraftPersistence(versionOrPersistence, savedAt);
   const frozenValue = freezeAnswerValue(value);
   return Object.freeze({
     questionId: asExamQuestionId(questionId.trim()),
     value: frozenValue,
     answered: isAnswerValueProvided(frozenValue),
-    flagged: Boolean(flagged)
+    flagged,
+    version: persistence.version,
+    savedAt: persistence.savedAt
   });
-};
+}
 
 export const updateAnswerDraft = (
   draft: AnswerDraft,
   value: AnswerValue
-): AnswerDraft => createAnswerDraft(draft.questionId, value, draft.flagged);
+): AnswerDraft => createAnswerDraft(draft.questionId, value, draft.flagged, draft.version, draft.savedAt);
 
 export const toggleAnswerDraftReview = (draft: AnswerDraft): AnswerDraft =>
-  createAnswerDraft(draft.questionId, draft.value, !draft.flagged);
+  createAnswerDraft(draft.questionId, draft.value, !draft.flagged, draft.version, draft.savedAt);
 
 export const deriveExamProgress = (
   questions: readonly ExamQuestion[],

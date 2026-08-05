@@ -1,4 +1,5 @@
-import { defer, of, type Observable } from 'rxjs';
+import { DEFAULT_MOCK_SCENARIO, MockTransport, type MockRequest, type MockScenarioControls } from '../../../core/api/mock-transport';
+import { defer, map, of, type Observable } from 'rxjs';
 
 import {
   asExamSessionId,
@@ -15,13 +16,21 @@ import {
   EXAM_SESSION_NONTERMINAL_STATES,
   transitionExamSession
 } from '../domain/exam-session-state-machine';
-
+import { createAnswerDraft, type AnswerDraft } from '../models/answer-draft.models';
 export type ExamSessionSource = () => string;
 
 export type ExamSessionRepositoryOptions = Readonly<{
   readonly idSource?: ExamSessionSource;
   readonly tokenSource?: ExamSessionSource;
   readonly referenceTimeSource?: ExamSessionSource;
+  readonly transport?: MockTransport | null;
+  readonly mockScenario?: Partial<MockScenarioControls>;
+}>;
+
+export type ExamSessionDraftListOptions = Readonly<Partial<MockScenarioControls>>;
+
+export type ExamSessionDraftSaveOptions = Readonly<Partial<MockScenarioControls> & {
+  readonly expectedVersion?: number;
 }>;
 
 export type ExamSessionOpenInput = Readonly<{
@@ -39,8 +48,14 @@ export type ExamSessionTransitionOptions = Readonly<{
   readonly expectedVersion?: number;
 }>;
 
+export type ExamSessionDraftSnapshot = Readonly<{
+  readonly sessionId: ExamSessionId;
+  readonly drafts: readonly AnswerDraft[];
+}>;
+
 export type ExamSessionRepositorySnapshot = Readonly<{
   readonly sessions: readonly ExamSession[];
+  readonly drafts: readonly ExamSessionDraftSnapshot[];
 }>;
 
 export type ExamSessionRepositoryErrorCode = 'not-found' | 'conflict' | 'validation';
@@ -78,7 +93,20 @@ const normalizeDurationMs = (value: unknown): number => {
   }
 };
 
+const normalizeDraftVersion = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new ExamSessionRepositoryError('validation', 'expectedVersion must be a nonnegative safe integer.', 'expectedVersion');
+  }
+  return value;
+};
+
 const pairKey = (studentId: string, examId: string): string => JSON.stringify([studentId, examId]);
+
+const draftSort = (left: AnswerDraft, right: AnswerDraft): number =>
+  left.questionId < right.questionId ? -1 : left.questionId > right.questionId ? 1 : 0;
+
+const sessionSort = (left: ExamSession, right: ExamSession): number =>
+  left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 
 const isNonterminal = (state: ExamSessionState): boolean =>
   EXAM_SESSION_NONTERMINAL_STATES.includes(state as (typeof EXAM_SESSION_NONTERMINAL_STATES)[number]);
@@ -97,15 +125,20 @@ export class ExamSessionRepository {
   private readonly sessions = new Map<ExamSessionId, ExamSession>();
   private readonly tokenIndex = new Map<ExamSessionRouteToken, ExamSessionId>();
   private readonly activePairIndex = new Map<string, ExamSessionId>();
+  private readonly draftsBySession = new Map<ExamSessionId, Map<string, AnswerDraft>>();
+  private readonly transport: MockTransport;
   private readonly idSource: ExamSessionSource;
   private readonly tokenSource: ExamSessionSource;
   private readonly referenceTimeSource: ExamSessionSource;
+  private scenarioControls: MockScenarioControls;
   private sequence = 1;
 
   constructor(options: ExamSessionRepositoryOptions = {}) {
     this.idSource = options.idSource ?? (() => `exam-session-${this.sequence++}`);
     this.tokenSource = options.tokenSource ?? defaultTokenSource;
     this.referenceTimeSource = options.referenceTimeSource ?? defaultReferenceTimeSource;
+    this.transport = options.transport ?? new MockTransport();
+    this.scenarioControls = Object.freeze({ ...DEFAULT_MOCK_SCENARIO, ...(options.mockScenario ?? {}) });
   }
   open(input: ExamSessionOpenInput): Observable<ExamSession> {
     return defer(() => {
@@ -172,6 +205,100 @@ export class ExamSessionRepository {
     });
   }
 
+  listDrafts(
+    idOrToken: ExamSessionId | ExamSessionRouteToken | string,
+    options: ExamSessionDraftListOptions = {}
+  ): Observable<readonly AnswerDraft[]> {
+    return defer(() => {
+      const session = this.requireSession(idOrToken);
+      const successBodyFactory = (): readonly AnswerDraft[] => {
+        const drafts = this.draftsBySession.get(session.id);
+        return Object.freeze([...(drafts?.values() ?? [])].sort(draftSort));
+      };
+      const controls = { ...this.scenarioControls, ...options };
+      if (controls.latencyMs === 0 && controls.outcome === 'success' &&
+        controls.transientServiceFailures === 0 && controls.retryLimit === 0 && controls.retryDelayMs === 0) {
+        return of(successBodyFactory());
+      }
+      return this.execute(
+        { method: 'GET', url: `/exam-sessions/${session.id}/drafts` },
+        successBodyFactory,
+        controls
+      );
+    });
+  }
+
+  saveDraft(
+    idOrToken: ExamSessionId | ExamSessionRouteToken | string,
+    questionId: string,
+    draft: AnswerDraft,
+    options: ExamSessionDraftSaveOptions = {}
+  ): Observable<AnswerDraft> {
+    return defer(() => {
+      const session = this.requireSession(idOrToken);
+      const normalizedQuestionId = normalizeText(questionId, 'questionId');
+      const normalizedDraft = this.normalizeDraft(draft, normalizedQuestionId);
+      const expectedVersion = normalizeDraftVersion(options.expectedVersion);
+      if (normalizedDraft.version !== expectedVersion) {
+        throw new ExamSessionRepositoryError(
+          'conflict',
+          `Answer draft ${normalizedQuestionId} has a stale version.`,
+          normalizedQuestionId,
+          'stale-version'
+        );
+      }
+      const { expectedVersion: _expectedVersion, ...perCallControls } = options;
+      return this.execute(
+        {
+          method: 'PUT',
+          url: `/exam-sessions/${session.id}/drafts/${encodeURIComponent(normalizedQuestionId)}`,
+          body: normalizedDraft
+        },
+        () => {
+          const drafts = this.draftsBySession.get(session.id);
+          const current = drafts?.get(normalizedQuestionId);
+          const currentVersion = current?.version ?? 0;
+          if (currentVersion !== expectedVersion) {
+            throw new ExamSessionRepositoryError(
+              'conflict',
+              `Answer draft ${normalizedQuestionId} changed elsewhere. Reload before saving it.`,
+              normalizedQuestionId,
+              'stale-version'
+            );
+          }
+          const savedAt = normalizeText(this.referenceTimeSource(), 'referenceTimeSource');
+          const persisted = createAnswerDraft(
+            normalizedQuestionId,
+            normalizedDraft.value,
+            normalizedDraft.flagged,
+            expectedVersion + 1,
+            savedAt
+          );
+          const nextDrafts = drafts ?? new Map<string, AnswerDraft>();
+          nextDrafts.set(normalizedQuestionId, persisted);
+          this.draftsBySession.set(session.id, nextDrafts);
+          return persisted;
+        },
+        { ...this.scenarioControls, ...perCallControls }
+      );
+    });
+  }
+
+  setMockScenario(controls: Partial<MockScenarioControls>): void {
+    if (controls === null || typeof controls !== 'object' || Array.isArray(controls)) {
+      throw new TypeError('Mock scenario controls must be an object.');
+    }
+    this.scenarioControls = Object.freeze({ ...this.scenarioControls, ...controls });
+  }
+
+  resetMockScenario(): void {
+    this.scenarioControls = { ...DEFAULT_MOCK_SCENARIO };
+  }
+
+  getMockScenario(): Readonly<MockScenarioControls> {
+    return Object.freeze({ ...this.scenarioControls });
+  }
+
   transition(
     idOrToken: ExamSessionId | ExamSessionRouteToken | string,
     nextState: ExamSessionState,
@@ -207,8 +334,46 @@ export class ExamSessionRepository {
   }
 
   getSnapshot(): ExamSessionRepositorySnapshot {
-    const sessions = [...this.sessions.values()].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
-    return Object.freeze({ sessions: Object.freeze(sessions) });
+    const sessions = Object.freeze([...this.sessions.values()].sort(sessionSort));
+    const drafts = Object.freeze([...this.draftsBySession.entries()]
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([sessionId, entries]) => Object.freeze({
+        sessionId,
+        drafts: Object.freeze([...entries.values()].sort(draftSort))
+      })));
+    return Object.freeze({ sessions, drafts });
+  }
+
+  private requireSession(idOrToken: ExamSessionId | ExamSessionRouteToken | string): ExamSession {
+    const identifier = normalizeText(idOrToken, 'session identifier');
+    const session = this.findByIdOrToken(identifier);
+    if (session === undefined) {
+      throw new ExamSessionRepositoryError('not-found', `Exam session ${identifier} was not found.`, identifier);
+    }
+    return session;
+  }
+
+  private normalizeDraft(draft: AnswerDraft, questionId: string): AnswerDraft {
+    if (draft === null || typeof draft !== 'object' || Array.isArray(draft)) {
+      throw new ExamSessionRepositoryError('validation', 'Answer draft must be an object.', questionId);
+    }
+    if (String(draft.questionId).trim() !== questionId) {
+      throw new ExamSessionRepositoryError('validation', 'Answer draft questionId must match the request.', questionId);
+    }
+    try {
+      return createAnswerDraft(questionId, draft.value, draft.flagged, draft.version, draft.savedAt);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Answer draft is invalid.';
+      throw new ExamSessionRepositoryError('validation', message, questionId);
+    }
+  }
+
+  private execute<T>(
+    request: MockRequest<unknown>,
+    successBodyFactory: () => T,
+    controls: Partial<MockScenarioControls>
+  ): Observable<T> {
+    return this.transport.execute(request, successBodyFactory, controls).pipe(map((response) => response.body));
   }
 
   private nextId(requested: ExamSessionId | string | undefined): ExamSessionId {

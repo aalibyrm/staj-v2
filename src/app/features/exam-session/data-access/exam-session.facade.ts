@@ -1,5 +1,5 @@
 import { Inject, Injectable, InjectionToken, Optional, computed, signal, type Signal, type WritableSignal } from '@angular/core';
-import { catchError, defer, interval, map, of, startWith, switchMap, tap, throwError, type Observable, type Subscription } from 'rxjs';
+import { Subject, catchError, debounceTime, defer, groupBy, interval, map, mergeMap, of, startWith, switchMap, tap, throwError, type Observable, type Subscription } from 'rxjs';
 
 import { normalizeApplicationError } from '../../../core/api/api-error';
 import {
@@ -41,6 +41,41 @@ export type ExamSessionRequestState = Readonly<{
   readonly message?: string;
   readonly retryable?: boolean;
 }>;
+
+export type ExamSessionAutosaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+export type ExamSessionAutosaveState = Readonly<{
+  readonly status: ExamSessionAutosaveStatus;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly savedAt: string | null;
+}>;
+
+export const EXAM_SESSION_AUTOSAVE_DEBOUNCE_MS = 300;
+
+type AutosaveRequest = Readonly<{
+  readonly sessionId: string;
+  readonly questionId: string;
+  readonly draft: AnswerDraft;
+  readonly revision: number;
+  readonly loadRevision: number;
+}>;
+
+type AutosaveResult = Readonly<{
+  readonly request: AutosaveRequest;
+  readonly persisted?: AnswerDraft;
+  readonly error?: unknown;
+}>;
+
+const createAutosaveState = (
+  status: ExamSessionAutosaveStatus,
+  message = '',
+  retryable = false,
+  savedAt: string | null = null
+): ExamSessionAutosaveState => Object.freeze({ status, message, retryable, savedAt });
+
+const autosaveErrorMessage = (error: unknown): string =>
+  error instanceof Error && error.message.trim().length > 0 ? error.message : 'Answer draft could not be saved.';
 
 export type ExamSessionQuestionSource = (session: ExamSession) => Observable<readonly ExamQuestionInput[]>;
 
@@ -140,18 +175,6 @@ export const EXAM_SESSION_MONOTONIC_NOW_SOURCE = new InjectionToken<() => number
   { providedIn: 'root', factory: () => defaultMonotonicNow }
 );
 
-const freezeQuestions = (inputs: readonly ExamQuestionInput[]): readonly ExamQuestion[] => {
-  const seen = new Set<string>();
-  const normalized = inputs.map((input) => {
-    const question = createExamQuestion(input);
-    if (seen.has(question.id)) throw new Error(`Question id ${question.id} is duplicated.`);
-    seen.add(question.id);
-    return question;
-  });
-  normalized.sort((left, right) => left.order - right.order || String(left.id).localeCompare(String(right.id)));
-  return Object.freeze(normalized);
-};
-
 const errorCode = (error: unknown): string =>
   typeof error === 'object' && error !== null && 'code' in error ? String((error as { readonly code?: unknown }).code) : '';
 
@@ -163,6 +186,18 @@ const messageForError = (error: unknown): string => {
 const requestStatusForError = (error: unknown): Extract<ExamSessionRequestStatus, 'error' | 'unauthorized'> => {
   const code = errorCode(error);
   return code === 'unauthorized' || normalizeApplicationError(error).kind === 'unauthorized' ? 'unauthorized' : 'error';
+};
+
+const freezeQuestions = (inputs: readonly ExamQuestionInput[]): readonly ExamQuestion[] => {
+  const seen = new Set<string>();
+  const normalized = inputs.map((input) => {
+    const question = createExamQuestion(input);
+    if (seen.has(question.id)) throw new Error(`Question id ${question.id} is duplicated.`);
+    seen.add(question.id);
+    return question;
+  });
+  normalized.sort((left, right) => left.order - right.order || String(left.id).localeCompare(String(right.id)));
+  return Object.freeze(normalized);
 };
 
 const nonterminal = (state: ExamSessionState): boolean => !EXAM_SESSION_TERMINAL_STATES.includes(state as (typeof EXAM_SESSION_TERMINAL_STATES)[number]);
@@ -180,6 +215,10 @@ export class ExamSessionFacade {
   private readonly timerState = signal<ReferenceTimeTimerSnapshot | null>(null);
   private readonly actionState = signal<'idle' | 'loading' | 'error'>('idle');
   private readonly answerRevision = signal(0);
+  private readonly autosaveStateState = signal<ExamSessionAutosaveState>(createAutosaveState('idle'));
+  private autosaveRequests = new Subject<AutosaveRequest>();
+  private autosaveSubscription: Subscription | null = null;
+  private autosaveRetrySnapshot: AutosaveRequest | null = null;
   private requestRevision = 0;
   private transitionRevision = 0;
   private lastRouteToken: string | null = null;
@@ -188,6 +227,7 @@ export class ExamSessionFacade {
   private expiryTransitionRequested = false;
 
   readonly requestState: Signal<ExamSessionRequestState> = this.requestStateState.asReadonly();
+  readonly autosaveState: Signal<ExamSessionAutosaveState> = this.autosaveStateState.asReadonly();
   readonly session: Signal<ExamSession | null> = this.sessionState.asReadonly();
   readonly questions: Signal<readonly ExamQuestion[]> = this.questionsState.asReadonly();
   readonly currentIndex: Signal<number> = this.currentIndexState.asReadonly();
@@ -216,7 +256,7 @@ export class ExamSessionFacade {
     this.repository = repository ?? new ExamSessionRepository({ tokenSource: () => DEFAULT_ROUTE_TOKEN });
     this.questionSource = questionSource ?? defaultQuestionSource;
     this.monotonicNowSource = monotonicNowSource ?? defaultMonotonicNow;
-
+    this.startAutosavePipeline();
     this.currentQuestion = computed(() => this.questionsState()[this.currentIndexState()] ?? null);
     this.draftMap = computed(() => freezeAnswerDraftMap(this.draftsState()));
     this.progress = computed(() => deriveExamProgress(this.questionsState(), this.draftMap(), this.currentIndexState()));
@@ -251,11 +291,18 @@ export class ExamSessionFacade {
   ngOnDestroy(): void {
     this.timerSubscription?.unsubscribe();
     this.timerSubscription = null;
+    this.autosaveSubscription?.unsubscribe();
+    this.autosaveSubscription = null;
+    this.autosaveRequests.complete();
+    this.autosaveRetrySnapshot = null;
   }
 
   load(routeToken: string): Observable<ExamSessionLoadResult> {
     const token = routeToken.trim();
     const revision = ++this.requestRevision;
+    this.resetAutosavePipeline();
+    this.autosaveRetrySnapshot = null;
+    this.autosaveStateState.set(createAutosaveState('idle'));
     this.lastRouteToken = token;
     this.requestStateState.set({ status: 'loading' });
     this.sessionState.set(null);
@@ -274,11 +321,18 @@ export class ExamSessionFacade {
     return this.repository.resolveByToken(token).pipe(
       switchMap((session) => this.activateIfCreated(session)),
       switchMap((session) => this.questionSource(session).pipe(map((questionInputs) => ({ session, questionInputs })))),
-      map(({ session, questionInputs }) => Object.freeze({ session, questions: freezeQuestions(questionInputs) })),
-      tap((result) => {
+      switchMap(({ session, questionInputs }) => this.repository.listDrafts(session.id).pipe(
+        map((drafts) => ({ session, questionInputs, drafts }))
+      )),
+      map(({ session, questionInputs, drafts }) => Object.freeze({
+        result: Object.freeze({ session, questions: freezeQuestions(questionInputs) }),
+        drafts
+      })),
+      tap(({ result, drafts }) => {
         if (revision !== this.requestRevision) return;
-        this.applyLoadedResult(result);
+        this.applyLoadedResult(result, drafts);
       }),
+      map(({ result }) => result),
       catchError((error: unknown) => {
         if (revision === this.requestRevision) {
           this.requestStateState.set({ status: requestStatusForError(error), message: messageForError(error), retryable: true });
@@ -321,7 +375,9 @@ export class ExamSessionFacade {
     const nextDrafts = [...this.draftsState()];
     nextDrafts[index] = next;
     this.draftsState.set(Object.freeze(nextDrafts));
-    this.answerRevision.update((revision) => revision + 1);
+    const revision = this.answerRevision() + 1;
+    this.answerRevision.set(revision);
+    this.queueAutosave(questionId, next, revision);
     return true;
   }
 
@@ -330,9 +386,24 @@ export class ExamSessionFacade {
     const index = this.draftsState().findIndex((draft) => draft.questionId === questionId);
     if (index < 0) return false;
     const nextDrafts = [...this.draftsState()];
-    nextDrafts[index] = toggleAnswerDraftReview(nextDrafts[index]);
+    const next = toggleAnswerDraftReview(nextDrafts[index]);
+    nextDrafts[index] = next;
     this.draftsState.set(Object.freeze(nextDrafts));
-    this.answerRevision.update((revision) => revision + 1);
+    const revision = this.answerRevision() + 1;
+    this.answerRevision.set(revision);
+    this.queueAutosave(questionId, next, revision);
+    return true;
+  }
+
+  retryAutosave(): boolean {
+    const snapshot = this.autosaveRetrySnapshot;
+    const session = this.sessionState();
+    if (snapshot === null || session === null || snapshot.sessionId !== session.id ||
+      snapshot.loadRevision !== this.requestRevision || snapshot.revision !== this.answerRevision()) {
+      return false;
+    }
+    this.autosaveStateState.set(createAutosaveState('saving', 'Saving', false, snapshot.draft.savedAt));
+    this.autosaveRequests.next(snapshot);
     return true;
   }
 
@@ -390,11 +461,12 @@ export class ExamSessionFacade {
     return isAnswerValueProvided(this.draftFor(questionId)?.value);
   }
 
-  private applyLoadedResult(result: ExamSessionLoadResult): void {
+  private applyLoadedResult(result: ExamSessionLoadResult, persistedDrafts: readonly AnswerDraft[]): void {
     this.sessionState.set(result.session);
     this.questionsState.set(result.questions);
     this.currentIndexState.set(0);
-    const drafts = result.questions.map((question) => createAnswerDraft(question.id));
+    const persistedByQuestion = new Map(persistedDrafts.map((draft) => [draft.questionId, draft] as const));
+    const drafts = result.questions.map((question) => persistedByQuestion.get(question.id) ?? createAnswerDraft(question.id));
     this.draftsState.set(Object.freeze(drafts));
     this.answerRevision.set(0);
     this.timerAnchor = createReferenceTimeAnchor(Date.parse(result.session.referenceTime), this.monotonicNowSource());
@@ -411,6 +483,94 @@ export class ExamSessionFacade {
     });
     this.timerSubscription?.unsubscribe();
     this.timerSubscription = interval(500).pipe(startWith(0), tap(() => this.refreshTimer())).subscribe();
+  }
+
+  private queueAutosave(questionId: string, draft: AnswerDraft, revision: number): void {
+    const session = this.sessionState();
+    if (session === null) return;
+    this.autosaveRetrySnapshot = null;
+    this.autosaveStateState.set(createAutosaveState('idle', '', false, draft.savedAt));
+    this.autosaveRequests.next(Object.freeze({
+      sessionId: session.id,
+      questionId,
+      draft,
+      revision,
+      loadRevision: this.requestRevision
+    }));
+  }
+
+  private startAutosavePipeline(): void {
+    this.autosaveSubscription = this.autosaveRequests.pipe(
+      groupBy((request) => request.questionId),
+      mergeMap((requests) => requests.pipe(
+        debounceTime(EXAM_SESSION_AUTOSAVE_DEBOUNCE_MS),
+        switchMap((request) => this.saveAutosave(request))
+      ))
+    ).subscribe((result) => this.applyAutosaveResult(result));
+  }
+
+  private saveAutosave(request: AutosaveRequest): Observable<AutosaveResult> {
+    const session = this.sessionState();
+    const current = this.draftFor(request.questionId);
+    if (session === null || session.id !== request.sessionId || request.loadRevision !== this.requestRevision || current === undefined) {
+      return of({ request });
+    }
+    const effectiveRequest = request.revision === this.answerRevision()
+      ? Object.freeze({ ...request, draft: current })
+      : request;
+    this.autosaveStateState.set(createAutosaveState('saving', 'Saving', false, current.savedAt));
+    return this.repository.saveDraft(
+      effectiveRequest.sessionId,
+      effectiveRequest.questionId,
+      effectiveRequest.draft,
+      { expectedVersion: effectiveRequest.draft.version }
+    ).pipe(
+      map((persisted) => ({ request: effectiveRequest, persisted })),
+      catchError((error: unknown) => of({ request: effectiveRequest, error }))
+    );
+  }
+
+  private applyAutosaveResult(result: AutosaveResult): void {
+    const session = this.sessionState();
+    if (session === null || session.id !== result.request.sessionId ||
+      result.request.loadRevision !== this.requestRevision) return;
+    const index = this.draftsState().findIndex((draft) => draft.questionId === result.request.questionId);
+    if (index < 0) return;
+    const current = this.draftsState()[index];
+    if (result.persisted !== undefined) {
+      if (result.persisted.version >= current.version) {
+        const nextDrafts = [...this.draftsState()];
+        nextDrafts[index] = createAnswerDraft(
+          current.questionId,
+          current.value,
+          current.flagged,
+          result.persisted.version,
+          result.persisted.savedAt
+        );
+        this.draftsState.set(Object.freeze(nextDrafts));
+      }
+      if (result.request.revision === this.answerRevision()) {
+        this.autosaveRetrySnapshot = null;
+        this.autosaveStateState.set(createAutosaveState('saved', 'Saved', false, result.persisted.savedAt));
+      }
+      return;
+    }
+    if (result.error === undefined || result.request.revision !== this.answerRevision()) return;
+    this.autosaveRetrySnapshot = result.request;
+    this.autosaveStateState.set(createAutosaveState(
+      'error',
+      autosaveErrorMessage(result.error),
+      true,
+      current.savedAt
+    ));
+  }
+
+  private resetAutosavePipeline(): void {
+    this.autosaveSubscription?.unsubscribe();
+    this.autosaveSubscription = null;
+    this.autosaveRequests.complete();
+    this.autosaveRequests = new Subject<AutosaveRequest>();
+    this.startAutosavePipeline();
   }
 
   private activateIfCreated(session: ExamSession): Observable<ExamSession> {
