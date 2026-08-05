@@ -1,13 +1,17 @@
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
-import { NEVER, of, throwError } from 'rxjs';
+import { NEVER, Subject, of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ROUTE_CAPABILITIES } from '../../../core/auth/authorization';
 import { ROUTE_CAPABILITIES_DATA_KEY, authGuard } from '../../../core/auth/auth.guard';
 import { adaptiveLearningRoutes } from '../../adaptive-learning/adaptive-learning.routes';
+import { InMemoryStorageAdapter, type StorageAdapter } from '../../../core/storage/storage-adapter';
+import { PlatformEventBus, PlatformState } from '../../../core/state/platform-state';
 import { ExamSessionFacade, EXAM_SESSION_QUESTION_SOURCE, type ExamSessionQuestionSource } from '../data-access/exam-session.facade';
+import { OfflineAnswerQueue } from '../data-access/offline-answer-queue';
 import { ExamSessionRepository } from '../data-access/exam-session.repository';
+import { createAnswerDraft, type AnswerDraft } from '../models/answer-draft.models';
 import { ExamSessionComponent } from './exam-session.component';
 
 const questionSource: ExamSessionQuestionSource = () => of([
@@ -461,6 +465,251 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
       vi.useRealTimers();
     }
   });
+
+  it('keeps shared-facade stale answers explicit and preserves the chosen draft', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const firstFacade = createLoadedFacade(repository);
+    const secondFacade = createLoadedFacade(repository);
+    try {
+      repository.setMockScenario({ latencyMs: 20 });
+      firstFacade.updateAnswer('question-a', 'server answer');
+      await vi.advanceTimersByTimeAsync(320);
+      secondFacade.updateAnswer('question-a', 'local answer');
+      await vi.advanceTimersByTimeAsync(320);
+      await vi.advanceTimersByTimeAsync(20);
+
+
+      const conflict = secondFacade.autosaveConflict();
+      expect(conflict).toMatchObject({
+        sessionId: 'session-test',
+        questionId: 'question-a',
+        localDraft: expect.objectContaining({ value: 'local answer', version: 0 }),
+        serverDraft: expect.objectContaining({ value: 'server answer', version: 1 })
+      });
+      expect(repository.getSnapshot().drafts[0]?.drafts[0]).toMatchObject({ value: 'server answer', version: 1 });
+
+      await secondFacade.useServerAnswer();
+      expect(secondFacade.autosaveConflict()).toBeNull();
+      expect(secondFacade.draftFor('question-a')).toMatchObject({ value: 'server answer', version: 1 });
+
+      firstFacade.updateAnswer('question-a', 'new server answer');
+      await vi.advanceTimersByTimeAsync(320);
+      secondFacade.updateAnswer('question-a', 'kept local answer');
+      await vi.advanceTimersByTimeAsync(320);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(secondFacade.autosaveConflict()?.serverDraft).toMatchObject({ value: 'new server answer', version: 2 });
+
+      repository.setMockScenario({ latencyMs: 0 });
+      const keepLocal = secondFacade.keepLocalAnswer();
+      await vi.advanceTimersByTimeAsync(0);
+      await keepLocal;
+      expect(secondFacade.autosaveConflict()).toBeNull();
+      expect(repository.getSnapshot().drafts[0]?.drafts[0]).toMatchObject({ value: 'kept local answer', version: 3 });
+    } finally {
+      firstFacade.ngOnDestroy();
+      secondFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it('renders an alert conflict region with labeled local/server choices', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const firstFacade = createLoadedFacade(repository);
+    const secondFacade = createLoadedFacade(repository);
+    let fixture: ComponentFixture<ExamSessionComponent> | undefined;
+    try {
+      repository.setMockScenario({ latencyMs: 20 });
+      firstFacade.updateAnswer('question-a', 'server answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(20);
+      secondFacade.updateAnswer('question-a', 'local answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(20);
+      routeParam.mockReturnValue('');
+      TestBed.overrideProvider(ExamSessionFacade, { useValue: secondFacade });
+      fixture = TestBed.createComponent(ExamSessionComponent);
+      fixture.detectChanges();
+      const region = fixture.nativeElement.querySelector('.draft-conflict') as HTMLElement;
+      expect(region.getAttribute('role')).toBe('alert');
+      expect(region.getAttribute('aria-live')).toBe('assertive');
+      expect(region.textContent).toContain('Your local answer');
+      expect(region.textContent).toContain('Server answer');
+      expect(region.querySelector('button[aria-label="Use server answer"]') ?? region.textContent).toContain('Use server answer');
+      expect(region.querySelector('button')?.textContent).toContain('Use server answer');
+      expect(Array.from(region.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual([
+        'Use server answer',
+        'Keep my answer'
+      ]);
+    } finally {
+      fixture?.destroy();
+      firstFacade.ngOnDestroy();
+      secondFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it('retains both drafts and exposes retry after keep-local service failure', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const firstFacade = createLoadedFacade(repository);
+    const secondFacade = createLoadedFacade(repository);
+    try {
+      repository.setMockScenario({ latencyMs: 20 });
+      firstFacade.updateAnswer('question-a', 'server answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(20);
+      secondFacade.updateAnswer('question-a', 'local answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(20);
+      repository.setMockScenario({ outcome: 'service-error', latencyMs: 20, retryLimit: 0 });
+      const failed = secondFacade.keepLocalAnswer();
+      await vi.advanceTimersByTimeAsync(20);
+      await failed;
+      expect(secondFacade.autosaveConflict()).toMatchObject({
+        localDraft: expect.objectContaining({ value: 'local answer' }),
+        serverDraft: expect.objectContaining({ value: 'server answer' }),
+        resolutionError: expect.stringContaining('Mock transport service failure')
+      });
+      expect(secondFacade.autosaveState()).toMatchObject({ status: 'error', retryable: true });
+      repository.setMockScenario({ outcome: 'success', latencyMs: 20 });
+      expect(secondFacade.retryAutosave()).toBe(true);
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(secondFacade.autosaveConflict()).toBeNull();
+      expect(repository.getSnapshot().drafts[0]?.drafts[0]).toMatchObject({ value: 'local answer' });
+    } finally {
+      firstFacade.ngOnDestroy();
+      secondFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it('refreshes the conflict after a second-tab keep-local race', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const firstFacade = createLoadedFacade(repository);
+    const secondFacade = createLoadedFacade(repository);
+    try {
+      repository.setMockScenario({ latencyMs: 0 });
+      firstFacade.updateAnswer('question-a', 'server answer');
+      await vi.advanceTimersByTimeAsync(300);
+      secondFacade.updateAnswer('question-a', 'local answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+      repository.setMockScenario({ latencyMs: 40 });
+      firstFacade.updateAnswer('question-a', 'newest server answer');
+      await vi.advanceTimersByTimeAsync(300);
+      const pending = secondFacade.keepLocalAnswer();
+      await vi.advanceTimersByTimeAsync(80);
+      await pending;
+      expect(secondFacade.autosaveConflict()).toMatchObject({
+        localDraft: expect.objectContaining({ value: 'local answer' }),
+        serverDraft: expect.objectContaining({ value: 'newest server answer', version: 2 })
+      });
+      expect(repository.getSnapshot().drafts[0]?.drafts[0]).toMatchObject({ value: 'newest server answer', version: 2 });
+    } finally {
+      firstFacade.ngOnDestroy();
+      secondFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it('ignores a late keep-local completion after load revision changes', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const firstFacade = createLoadedFacade(repository);
+    const secondFacade = createLoadedFacade(repository);
+    try {
+      repository.setMockScenario({ latencyMs: 0 });
+      firstFacade.updateAnswer('question-a', 'server answer');
+      await vi.advanceTimersByTimeAsync(300);
+      secondFacade.updateAnswer('question-a', 'local answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+      const pendingSave = new Subject<AnswerDraft>();
+      const saveDraft = vi.spyOn(repository, 'saveDraft').mockReturnValue(pendingSave.asObservable());
+      const resolution = secondFacade.keepLocalAnswer();
+      secondFacade.updateAnswer('question-a', 'newer local answer');
+      secondFacade.load('test-token').subscribe({ error: () => undefined });
+      pendingSave.next(createAnswerDraft('question-a', 'late answer', false, 2));
+      pendingSave.complete();
+      await resolution;
+      expect(secondFacade.autosaveConflict()).toBeNull();
+      expect(secondFacade.draftFor('question-a')?.value).toBe('server answer');
+      saveDraft.mockRestore();
+    } finally {
+      firstFacade.ngOnDestroy();
+      secondFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it('retains offline queue order across keep-local then use-server replay choices', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const externalFacade = createLoadedFacade(repository);
+    const storage = new InMemoryStorageAdapter<unknown>();
+    let operation = 0;
+    const queue = new OfflineAnswerQueue(storage as StorageAdapter<never>, () => `offline-${++operation}`);
+    const eventBus = new PlatformEventBus();
+    const platform = new PlatformState(eventBus);
+    const offlineFacade = new ExamSessionFacade(repository, questionSource, () => 10, queue, platform, eventBus);
+    offlineFacade.load('test-token').subscribe({ error: () => undefined });
+    try {
+      platform.setConnectivity('offline');
+      offlineFacade.updateAnswer('question-a', 'local one');
+      offlineFacade.updateAnswer('question-b', 'local two');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      repository.setMockScenario({ latencyMs: 20 });
+      externalFacade.updateAnswer('question-a', 'server one');
+      externalFacade.updateAnswer('question-b', 'server two');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(20);
+      expect((await queue.read()).map((record) => record.questionId)).toEqual(['question-a', 'question-b']);
+
+      platform.setConnectivity('online');
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(offlineFacade.autosaveConflict()?.questionId).toBe('question-a');
+      const keep = offlineFacade.keepLocalAnswer();
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      await keep;
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(offlineFacade.autosaveConflict()?.questionId).toBe('question-b');
+      expect((await queue.read()).map((record) => record.questionId)).toEqual(['question-b']);
+
+      await offlineFacade.useServerAnswer();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await queue.read()).toEqual([]);
+      expect(repository.getSnapshot().drafts[0]?.drafts).toEqual([
+        expect.objectContaining({ questionId: 'question-a', value: 'local one', version: 2 }),
+        expect.objectContaining({ questionId: 'question-b', value: 'server two', version: 1 })
+      ]);
+    } finally {
+      externalFacade.ngOnDestroy();
+      offlineFacade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+
+
+
+
 
   it('keeps the canonical student-only lazy route guarded', async () => {
     const route = adaptiveLearningRoutes.find((candidate) => candidate.path === 'exam-session/:token');

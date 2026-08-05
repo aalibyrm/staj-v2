@@ -44,14 +44,27 @@ export type ExamSessionRequestState = Readonly<{
   readonly message?: string;
   readonly retryable?: boolean;
 }>;
-
-export type ExamSessionAutosaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-
 export type ExamSessionAutosaveState = Readonly<{
   readonly status: ExamSessionAutosaveStatus;
   readonly message: string;
   readonly retryable: boolean;
   readonly savedAt: string | null;
+}>;
+
+
+export type ExamSessionAutosaveStatus = 'idle' | 'saving' | 'saved' | 'conflict' | 'error';
+
+export type ExamSessionAutosaveConflict = Readonly<{
+  readonly sessionId: string;
+  readonly questionId: string;
+  readonly loadRevision: number;
+  readonly localRevision: number;
+  readonly localDraft: AnswerDraft;
+  readonly serverDraft: AnswerDraft;
+  readonly origin: 'autosave' | 'offline-replay';
+  readonly operationId: string | null;
+  readonly resolutionStatus: 'idle' | 'resolving';
+  readonly resolutionError: string | null;
 }>;
 
 export const EXAM_SESSION_AUTOSAVE_DEBOUNCE_MS = 300;
@@ -179,8 +192,41 @@ export const EXAM_SESSION_MONOTONIC_NOW_SOURCE = new InjectionToken<() => number
   { providedIn: 'root', factory: () => defaultMonotonicNow }
 );
 
-const errorCode = (error: unknown): string =>
-  typeof error === 'object' && error !== null && 'code' in error ? String((error as { readonly code?: unknown }).code) : '';
+const errorProperty = (error: unknown, property: 'code' | 'reason'): unknown => {
+  if (typeof error !== 'object' || error === null || !(property in error)) return undefined;
+  return Reflect.get(error, property);
+};
+
+const errorCode = (error: unknown): string => String(errorProperty(error, 'code') ?? '');
+const errorReason = (error: unknown): string => String(errorProperty(error, 'reason') ?? '');
+
+const isStaleAnswerConflict = (error: unknown): boolean =>
+  errorCode(error) === 'conflict' && errorReason(error) === 'stale-version';
+
+const createAutosaveConflict = (
+  sessionId: string,
+  questionId: string,
+  loadRevision: number,
+  localRevision: number,
+  localDraft: AnswerDraft,
+  serverDraft: AnswerDraft,
+  origin: ExamSessionAutosaveConflict['origin'],
+  operationId: string | null,
+  resolutionStatus: ExamSessionAutosaveConflict['resolutionStatus'] = 'idle',
+  resolutionError: string | null = null
+): ExamSessionAutosaveConflict => Object.freeze({
+  sessionId,
+  questionId,
+  loadRevision,
+  localRevision,
+  localDraft,
+  serverDraft,
+  origin,
+  operationId,
+  resolutionStatus,
+  resolutionError
+});
+
 
 const messageForError = (error: unknown): string => {
   if (error instanceof Error && error.message.trim().length > 0) return error.message;
@@ -237,6 +283,9 @@ export class ExamSessionFacade {
   private readonly actionState = signal<'idle' | 'loading' | 'error'>('idle');
   private readonly answerRevision = signal(0);
   private readonly autosaveStateState = signal<ExamSessionAutosaveState>(createAutosaveState('idle'));
+  private readonly autosaveConflictState = signal<ExamSessionAutosaveConflict | null>(null);
+  private autosaveConflictRevision = 0;
+  private autosaveConflictRetryAction: 'use-server' | 'keep-local' | null = null;
   private autosaveRequests = new Subject<AutosaveRequest>();
   private autosaveSubscription: Subscription | null = null;
   private autosaveRetrySnapshot: AutosaveRequest | null = null;
@@ -255,6 +304,7 @@ export class ExamSessionFacade {
   private platformSubscription: Subscription | null = null;
   private replayPromise: Promise<void> | null = null;
   private destroyed = false;
+  readonly autosaveConflict: Signal<ExamSessionAutosaveConflict | null> = this.autosaveConflictState.asReadonly();
 
   readonly requestState: Signal<ExamSessionRequestState> = this.requestStateState.asReadonly();
   readonly autosaveState: Signal<ExamSessionAutosaveState> = this.autosaveStateState.asReadonly();
@@ -336,6 +386,12 @@ export class ExamSessionFacade {
     });
     this.localDraftStatus = computed(() => this.answerRevision() === 0 ? 'none' : 'local');
     this.liveStatus = computed(() => {
+      const conflict = this.autosaveConflictState();
+      if (conflict !== null) {
+        if (conflict.resolutionStatus === 'resolving') return 'Resolving answer conflict.';
+        if (conflict.resolutionError !== null) return `Answer conflict resolution failed: ${conflict.resolutionError}`;
+        return 'Answer changed elsewhere. Choose the local or server answer.';
+      }
       if (this.replayError() !== null) return `Queued answer sync error: ${this.replayError()}`;
       if (this.isOffline()) return `Offline — ${this.queuedAnswerCount()} answer(s) queued`;
       if (this.isReconnecting()) return `Reconnecting — syncing ${this.queuedAnswerCount()} answer(s)`;
@@ -359,6 +415,9 @@ export class ExamSessionFacade {
     this.autosaveSubscription?.unsubscribe();
     this.autosaveSubscription = null;
     this.autosaveRequests.complete();
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictState.set(null);
+    this.autosaveConflictRetryAction = null;
     this.autosaveRetrySnapshot = null;
   }
 
@@ -366,6 +425,9 @@ export class ExamSessionFacade {
     if (this.destroyed) return throwError(() => new ExamSessionFacadeError('not-ready', 'The exam session has been destroyed.'));
     const token = routeToken.trim();
     const revision = ++this.requestRevision;
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictState.set(null);
+    this.autosaveConflictRetryAction = null;
     this.resetAutosavePipeline();
     this.autosaveRetrySnapshot = null;
     this.platformState.setPendingOperations(0);
@@ -399,7 +461,7 @@ export class ExamSessionFacade {
       tap(({ result, drafts }) => {
         if (revision !== this.requestRevision) return;
         this.applyLoadedResult(result, drafts);
-        void this.refreshQueueState(result.session.id, revision);
+        void this.refreshQueueState(result.session.id, revision, 0);
       }),
       map(({ result }) => result),
       catchError((error: unknown) => {
@@ -465,6 +527,12 @@ export class ExamSessionFacade {
   }
 
   retryAutosave(): boolean {
+    const conflict = this.autosaveConflictState();
+    if (conflict !== null && conflict.resolutionError !== null && this.autosaveConflictRetryAction !== null) {
+      if (this.autosaveConflictRetryAction === 'use-server') void this.useServerAnswer();
+      else void this.keepLocalAnswer();
+      return true;
+    }
     const snapshot = this.autosaveRetrySnapshot;
     const session = this.sessionState();
     if (snapshot === null || session === null || snapshot.sessionId !== session.id ||
@@ -473,6 +541,115 @@ export class ExamSessionFacade {
     }
     this.autosaveStateState.set(createAutosaveState('saving', 'Saving', false, snapshot.draft.savedAt));
     this.autosaveRequests.next(snapshot);
+    return true;
+  }
+
+  async useServerAnswer(): Promise<boolean> {
+    const conflict = this.autosaveConflictState();
+    const session = this.sessionState();
+    const local = conflict === null ? undefined : this.draftFor(conflict.questionId);
+    if (session === null || conflict === null || local === undefined ||
+      conflict.resolutionStatus === 'resolving' || conflict.sessionId !== session.id ||
+      conflict.loadRevision !== this.requestRevision) return false;
+    const actionRevision = ++this.autosaveConflictRevision;
+    const localRevision = this.answerRevision();
+    const resolving = createAutosaveConflict(
+      conflict.sessionId, conflict.questionId, conflict.loadRevision, localRevision,
+      local, conflict.serverDraft, conflict.origin, conflict.operationId, 'resolving'
+    );
+    this.autosaveConflictRetryAction = 'use-server';
+    this.publishAutosaveConflict(resolving);
+    try {
+      if (conflict.origin === 'offline-replay' && conflict.operationId !== null) {
+        await this.offlineQueue.remove(conflict.operationId);
+      }
+    } catch (error: unknown) {
+      this.retainConflictError(resolving, 'use-server', error);
+      return false;
+    }
+    if (!this.isCurrentConflictAction(resolving, actionRevision, localRevision)) {
+      this.retainLateConflict(resolving);
+      return false;
+    }
+    this.replaceDraftWith(conflict.questionId, conflict.serverDraft);
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictState.set(null);
+    this.autosaveConflictRetryAction = null;
+    this.autosaveStateState.set(createAutosaveState('saved', 'Saved', false, conflict.serverDraft.savedAt));
+    if (conflict.origin === 'offline-replay') {
+      void this.refreshQueueState(session.id, this.requestRevision, this.answerRevision());
+      this.startReplay(session.id);
+    }
+    return true;
+  }
+
+  async keepLocalAnswer(): Promise<boolean> {
+    const conflict = this.autosaveConflictState();
+    const session = this.sessionState();
+    const local = conflict === null ? undefined : this.draftFor(conflict.questionId);
+    if (session === null || conflict === null || local === undefined ||
+      conflict.resolutionStatus === 'resolving' || conflict.sessionId !== session.id ||
+      conflict.loadRevision !== this.requestRevision) return false;
+    const actionRevision = ++this.autosaveConflictRevision;
+    const localRevision = this.answerRevision();
+    const resolving = createAutosaveConflict(
+      conflict.sessionId, conflict.questionId, conflict.loadRevision, localRevision,
+      local, conflict.serverDraft, conflict.origin, conflict.operationId, 'resolving'
+    );
+    this.autosaveConflictRetryAction = 'keep-local';
+    this.publishAutosaveConflict(resolving);
+    const draft = createAnswerDraft(conflict.questionId, local.value, local.flagged, {
+      version: conflict.serverDraft.version,
+      savedAt: local.savedAt
+    });
+    let persisted: AnswerDraft;
+    try {
+      persisted = await firstValueFrom(this.repository.saveDraft(
+        conflict.sessionId,
+        conflict.questionId,
+        draft,
+        { expectedVersion: conflict.serverDraft.version }
+      ));
+    } catch (error: unknown) {
+      if (isStaleAnswerConflict(error)) {
+        await this.refreshConflictAfterRace(resolving, 'keep-local');
+      } else {
+        this.retainConflictError(resolving, 'keep-local', error);
+      }
+      return false;
+    }
+    if (!this.isCurrentConflictAction(resolving, actionRevision, localRevision)) {
+      this.retainLateConflict(resolving, persisted);
+      return false;
+    }
+    try {
+      if (conflict.origin === 'offline-replay' && conflict.operationId !== null) {
+        await this.offlineQueue.remove(conflict.operationId);
+      }
+    } catch (error: unknown) {
+      this.retainConflictError(
+        createAutosaveConflict(
+          conflict.sessionId, conflict.questionId, conflict.loadRevision, localRevision,
+          local, persisted, conflict.origin, conflict.operationId
+        ),
+        'keep-local',
+        error
+      );
+      return false;
+    }
+    if (!this.isCurrentConflictAction(resolving, actionRevision, localRevision)) {
+      this.retainLateConflict(resolving, persisted);
+      return false;
+    }
+    this.replaceDraftWith(conflict.questionId, persisted);
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictState.set(null);
+    this.autosaveConflictRetryAction = null;
+    this.autosaveStateState.set(createAutosaveState('saved', 'Saved', false, persisted.savedAt));
+    if (conflict.origin === 'offline-replay') {
+      void this.refreshQueueState(session.id, this.requestRevision, this.answerRevision());
+      this.startReplay(session.id);
+    }
     return true;
   }
 
@@ -557,8 +734,25 @@ export class ExamSessionFacade {
   private queueAutosave(questionId: string, draft: AnswerDraft, revision: number): void {
     const session = this.sessionState();
     if (session === null) return;
+    const conflict = this.autosaveConflictState();
+    if (conflict?.questionId === questionId && conflict.sessionId === session.id) {
+      this.autosaveConflictRevision += 1;
+      this.autosaveConflictRetryAction = null;
+      this.autosaveConflictState.set(createAutosaveConflict(
+        conflict.sessionId,
+        conflict.questionId,
+        conflict.loadRevision,
+        revision,
+        draft,
+        conflict.serverDraft,
+        conflict.origin,
+        conflict.operationId
+      ));
+      this.publishAutosaveConflict(this.autosaveConflictState()!);
+      return;
+    }
     this.autosaveRetrySnapshot = null;
-    this.autosaveStateState.set(createAutosaveState('idle', '', false, draft.savedAt));
+    if (conflict === null) this.autosaveStateState.set(createAutosaveState('idle', '', false, draft.savedAt));
     this.autosaveRequests.next(Object.freeze({
       sessionId: session.id,
       questionId,
@@ -581,13 +775,14 @@ export class ExamSessionFacade {
   private saveAutosave(request: AutosaveRequest): Observable<AutosaveResult> {
     const session = this.sessionState();
     const current = this.draftFor(request.questionId);
-    if (session === null || session.id !== request.sessionId || request.loadRevision !== this.requestRevision || current === undefined) {
-      return of({ request });
-    }
+    if (session === null || session.id !== request.sessionId || request.loadRevision !== this.requestRevision ||
+      current === undefined || this.autosaveConflictState()?.questionId === request.questionId) return of({ request });
     const effectiveRequest = request.revision === this.answerRevision()
       ? Object.freeze({ ...request, draft: current })
       : request;
-    this.autosaveStateState.set(createAutosaveState('saving', 'Saving', false, current.savedAt));
+    if (this.autosaveConflictState() === null) {
+      this.autosaveStateState.set(createAutosaveState('saving', 'Saving', false, current.savedAt));
+    }
     const queueInput: OfflineAnswerQueueEnqueueInput = {
       sessionId: effectiveRequest.sessionId,
       questionId: effectiveRequest.questionId,
@@ -619,13 +814,14 @@ export class ExamSessionFacade {
     if (index < 0) return;
     const current = this.draftsState()[index];
     if (result.queued !== undefined) {
-      void this.refreshQueueState(session.id, result.request.loadRevision);
-      if (result.request.revision === this.answerRevision()) {
+      void this.refreshQueueState(session.id, result.request.loadRevision, result.request.revision);
+      if (result.request.revision === this.answerRevision() && this.autosaveConflictState() === null) {
         this.autosaveRetrySnapshot = null;
         this.autosaveStateState.set(createAutosaveState('saving', 'Queued offline', false, current.savedAt));
       }
       return;
     }
+    if (result.request.revision !== this.answerRevision() || this.autosaveConflictState()?.questionId === result.request.questionId) return;
     if (result.persisted !== undefined) {
       if (result.persisted.version >= current.version) {
         const nextDrafts = [...this.draftsState()];
@@ -638,13 +834,17 @@ export class ExamSessionFacade {
         );
         this.draftsState.set(Object.freeze(nextDrafts));
       }
-      if (result.request.revision === this.answerRevision() && this.queuedAnswerCount() === 0) {
+      if (this.queuedAnswerCount() === 0) {
         this.autosaveRetrySnapshot = null;
         this.autosaveStateState.set(createAutosaveState('saved', 'Saved', false, result.persisted.savedAt));
       }
       return;
     }
-    if (result.error === undefined || result.request.revision !== this.answerRevision()) return;
+    if (result.error === undefined) return;
+    if (isStaleAnswerConflict(result.error)) {
+      this.openAutosaveConflict(result.request);
+      return;
+    }
     this.autosaveRetrySnapshot = result.request;
     this.autosaveStateState.set(createAutosaveState(
       'error',
@@ -654,35 +854,167 @@ export class ExamSessionFacade {
     ));
   }
 
+  private publishAutosaveConflict(conflict: ExamSessionAutosaveConflict): void {
+    this.autosaveConflictState.set(conflict);
+    if (conflict.resolutionError !== null) {
+      this.autosaveStateState.set(createAutosaveState('error', conflict.resolutionError, true, conflict.localDraft.savedAt));
+    } else if (conflict.resolutionStatus === 'resolving') {
+      this.autosaveStateState.set(createAutosaveState('saving', 'Resolving conflict', false, conflict.localDraft.savedAt));
+    } else {
+      this.autosaveStateState.set(createAutosaveState('conflict', 'Choose the local or server answer.', false, conflict.localDraft.savedAt));
+    }
+  }
+
+  private openAutosaveConflict(request: AutosaveRequest): void {
+    const session = this.sessionState();
+    const local = this.draftFor(request.questionId);
+    if (session === null || local === undefined || request.revision !== this.answerRevision()) return;
+    const conflictRevision = ++this.autosaveConflictRevision;
+    this.repository.listDrafts(session.id).subscribe({
+      next: (drafts) => {
+        if (this.destroyed || conflictRevision !== this.autosaveConflictRevision ||
+          this.sessionState()?.id !== request.sessionId || request.loadRevision !== this.requestRevision ||
+          request.revision !== this.answerRevision()) return;
+        const current = this.draftFor(request.questionId);
+        if (current === undefined) return;
+        const server = drafts.find((draft) => draft.questionId === request.questionId) ?? createAnswerDraft(request.questionId);
+        this.autosaveRetrySnapshot = null;
+        this.autosaveConflictRetryAction = null;
+        this.publishAutosaveConflict(createAutosaveConflict(
+          request.sessionId, request.questionId, request.loadRevision, request.revision,
+          current, server, 'autosave', null
+        ));
+      },
+      error: (error: unknown) => {
+        if (this.destroyed || conflictRevision !== this.autosaveConflictRevision ||
+          this.sessionState()?.id !== request.sessionId || request.loadRevision !== this.requestRevision ||
+          request.revision !== this.answerRevision()) return;
+        this.autosaveRetrySnapshot = request;
+        this.autosaveStateState.set(createAutosaveState('error', autosaveErrorMessage(error), true, local.savedAt));
+      }
+    });
+  }
+
+  private isCurrentConflictAction(
+    conflict: ExamSessionAutosaveConflict,
+    actionRevision: number,
+    localRevision: number
+  ): boolean {
+    const current = this.autosaveConflictState();
+    return !this.destroyed &&
+      current !== null &&
+      current.sessionId === conflict.sessionId &&
+      current.questionId === conflict.questionId &&
+      current.loadRevision === conflict.loadRevision &&
+      current.resolutionStatus === 'resolving' &&
+      this.autosaveConflictRevision === actionRevision &&
+      this.answerRevision() === localRevision &&
+      this.sessionState()?.id === conflict.sessionId &&
+      this.requestRevision === conflict.loadRevision;
+  }
+
+  private retainConflictError(
+    conflict: ExamSessionAutosaveConflict,
+    action: 'use-server' | 'keep-local',
+    error: unknown
+  ): void {
+    const current = this.autosaveConflictState();
+    const local = this.draftFor(conflict.questionId);
+    if (current === null || local === undefined || current.sessionId !== conflict.sessionId ||
+      current.questionId !== conflict.questionId || this.sessionState()?.id !== conflict.sessionId ||
+      this.requestRevision !== conflict.loadRevision) return;
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictRetryAction = action;
+    this.publishAutosaveConflict(createAutosaveConflict(
+      current.sessionId, current.questionId, current.loadRevision, this.answerRevision(),
+      local, current.serverDraft, current.origin, current.operationId, 'idle', autosaveErrorMessage(error)
+    ));
+  }
+
+  private retainLateConflict(
+    conflict: ExamSessionAutosaveConflict,
+    serverDraft = conflict.serverDraft
+  ): void {
+    const current = this.autosaveConflictState();
+    const local = this.draftFor(conflict.questionId);
+    if (current === null || local === undefined || current.sessionId !== conflict.sessionId ||
+      current.questionId !== conflict.questionId || this.sessionState()?.id !== conflict.sessionId ||
+      this.requestRevision !== conflict.loadRevision) return;
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictRetryAction = null;
+    this.publishAutosaveConflict(createAutosaveConflict(
+      current.sessionId, current.questionId, current.loadRevision, this.answerRevision(),
+      local, serverDraft, current.origin, current.origin === 'offline-replay' ? null : current.operationId
+    ));
+  }
+
+  private async refreshConflictAfterRace(
+    conflict: ExamSessionAutosaveConflict,
+    action: 'use-server' | 'keep-local'
+  ): Promise<void> {
+    try {
+      const drafts = await firstValueFrom(this.repository.listDrafts(conflict.sessionId));
+      const current = this.autosaveConflictState();
+      const local = this.draftFor(conflict.questionId);
+      if (current === null || local === undefined || current.sessionId !== conflict.sessionId ||
+        current.questionId !== conflict.questionId || this.sessionState()?.id !== conflict.sessionId ||
+        this.requestRevision !== conflict.loadRevision) return;
+      this.autosaveConflictRevision += 1;
+      this.autosaveConflictRetryAction = null;
+      this.publishAutosaveConflict(createAutosaveConflict(
+        current.sessionId, current.questionId, current.loadRevision, this.answerRevision(),
+        local,
+        drafts.find((draft) => draft.questionId === conflict.questionId) ?? createAnswerDraft(conflict.questionId),
+        current.origin,
+        current.operationId
+      ));
+    } catch (error: unknown) {
+      this.retainConflictError(conflict, action, error);
+    }
+  }
+
+  private replaceDraftWith(questionId: string, persisted: AnswerDraft): void {
+    const index = this.draftsState().findIndex((draft) => draft.questionId === questionId);
+    if (index < 0) return;
+    const nextDrafts = [...this.draftsState()];
+    nextDrafts[index] = createAnswerDraft(questionId, persisted.value, persisted.flagged, persisted.version, persisted.savedAt);
+    this.draftsState.set(Object.freeze(nextDrafts));
+  }
+
   private onPlatformEvent(event: { readonly type: string }): void {
     if (event.type !== 'connectivity-changed') return;
     const session = this.sessionState();
     if (session === null || this.destroyed) return;
     const connectivity = this.platformState.state().connectivity;
     if (connectivity !== 'offline') this.startReplay(session.id);
-    void this.refreshQueueState(session.id, this.requestRevision);
+    void this.refreshQueueState(session.id, this.requestRevision, this.answerRevision());
   }
 
-  private refreshQueueState(sessionId: string, revision: number): Promise<void> {
+  private refreshQueueState(sessionId: string, revision: number, localRevision = this.answerRevision()): Promise<void> {
     return this.offlineQueue.read(sessionId).then(
       (records) => {
+        if (this.destroyed || revision !== this.requestRevision || this.sessionState()?.id !== sessionId) return;
         this.platformState.setPendingOperations(records.length);
         this.queueCountState.set(records.length);
-        for (const record of records) {
-          const index = this.draftsState().findIndex((draft) => draft.questionId === record.questionId);
-          if (index < 0) continue;
-          const current = this.draftsState()[index];
-          const nextDrafts = [...this.draftsState()];
-          nextDrafts[index] = createAnswerDraft(
-            current.questionId,
-            record.draft.value,
-            record.draft.flagged,
-            record.expectedVersion,
-            record.draft.savedAt
-          );
-          this.draftsState.set(Object.freeze(nextDrafts));
+        if (localRevision === this.answerRevision()) {
+          for (const record of records) {
+            if (this.autosaveConflictState()?.questionId === record.questionId) continue;
+            const index = this.draftsState().findIndex((draft) => draft.questionId === record.questionId);
+            if (index < 0) continue;
+            const current = this.draftsState()[index];
+            const nextDrafts = [...this.draftsState()];
+            nextDrafts[index] = createAnswerDraft(
+              current.questionId,
+              record.draft.value,
+              record.draft.flagged,
+              record.expectedVersion,
+              record.draft.savedAt
+            );
+            this.draftsState.set(Object.freeze(nextDrafts));
+          }
         }
-        if (records.length > 0 && this.platformState.state().connectivity !== 'offline') this.startReplay(sessionId);
+        if (records.length > 0 && this.platformState.state().connectivity !== 'offline' &&
+          this.autosaveConflictState() === null) this.startReplay(sessionId);
       },
       (error: unknown) => {
         if (this.destroyed || revision !== this.requestRevision || this.sessionState()?.id !== sessionId) return;
@@ -700,25 +1032,29 @@ export class ExamSessionFacade {
   }
 
   private startReplay(sessionId: string): void {
-    if (this.destroyed || this.replayPromise !== null || this.platformState.state().connectivity === 'offline') return;
+    if (this.destroyed || this.replayPromise !== null || this.platformState.state().connectivity === 'offline' ||
+      this.autosaveConflictState() !== null) return;
     this.replayPromise = this.replayQueue(sessionId).finally(() => {
       this.replayPromise = null;
       if (!this.destroyed && this.sessionState()?.id === sessionId && this.queueCountState() > 0 &&
-        this.platformState.state().connectivity !== 'offline' && this.replayError() === null) {
+        this.platformState.state().connectivity !== 'offline' && this.replayError() === null &&
+        this.autosaveConflictState() === null) {
         this.startReplay(sessionId);
       }
     });
   }
 
   private async replayQueue(sessionId: string): Promise<void> {
+    const loadRevision = this.requestRevision;
     if (this.sessionState()?.id !== sessionId) return;
     let lastSavedAt: string | null = null;
     this.replayingState.set(true);
     try {
       while (!this.destroyed && this.sessionState()?.id === sessionId &&
-        this.platformState.state().connectivity !== 'offline') {
+        this.requestRevision === loadRevision && this.platformState.state().connectivity !== 'offline' &&
+        this.autosaveConflictState() === null) {
         const records = await this.offlineQueue.read(sessionId);
-        if (this.destroyed || this.sessionState()?.id !== sessionId) return;
+        if (this.destroyed || this.sessionState()?.id !== sessionId || this.requestRevision !== loadRevision) return;
         this.platformState.setPendingOperations(records.length);
         this.queueCountState.set(records.length);
         const record = records[0];
@@ -729,9 +1065,12 @@ export class ExamSessionFacade {
           return;
         }
         try {
-          const persisted = await this.replayRecord(record);
+          const localRevision = this.answerRevision();
+          const persisted = await this.replayRecord(record, loadRevision);
+          if (persisted === null) return;
+          if (this.destroyed || this.sessionState()?.id !== sessionId || this.requestRevision !== loadRevision) return;
           lastSavedAt = persisted.savedAt;
-          this.applyPersistedDraft(persisted);
+          if (localRevision === this.answerRevision()) this.applyPersistedDraft(persisted);
           await this.offlineQueue.remove(record.operationId);
           this.platformState.setPendingOperations(Math.max(0, records.length - 1));
           this.queueCountState.set(Math.max(0, records.length - 1));
@@ -746,7 +1085,7 @@ export class ExamSessionFacade {
     }
   }
 
-  private async replayRecord(record: OfflineAnswerQueueRecord): Promise<AnswerDraft> {
+  private async replayRecord(record: OfflineAnswerQueueRecord, loadRevision: number): Promise<AnswerDraft | null> {
     try {
       return await firstValueFrom(this.repository.saveDraft(
         record.sessionId,
@@ -755,12 +1094,37 @@ export class ExamSessionFacade {
         { expectedVersion: record.expectedVersion }
       ));
     } catch (error: unknown) {
-      if (errorCode(error) !== 'conflict') throw error;
+      if (!isStaleAnswerConflict(error)) throw error;
       const persisted = await firstValueFrom(this.repository.listDrafts(record.sessionId));
+      if (this.destroyed || this.sessionState()?.id !== record.sessionId || this.requestRevision !== loadRevision) return null;
+      const server = persisted.find((draft) => draft.questionId === record.questionId) ?? createAnswerDraft(record.questionId);
       const equivalent = persisted.find((draft) => equivalentPersistedDraft(record, draft));
-      if (equivalent === undefined) throw error;
-      return equivalent;
-    }
+      if (equivalent !== undefined) return equivalent;
+      this.openOfflineReplayConflict(record, server, loadRevision);
+      return null;
+  }
+  }
+
+
+  private openOfflineReplayConflict(
+    record: OfflineAnswerQueueRecord,
+    serverDraft: AnswerDraft,
+    loadRevision: number
+  ): void {
+    const local = this.draftFor(record.questionId);
+    if (local === undefined) return;
+    this.autosaveConflictRevision += 1;
+    this.autosaveConflictRetryAction = null;
+    this.publishAutosaveConflict(createAutosaveConflict(
+      record.sessionId,
+      record.questionId,
+      loadRevision,
+      this.answerRevision(),
+      local,
+      serverDraft,
+      'offline-replay',
+      record.operationId
+    ));
   }
 
   private applyPersistedDraft(persisted: AnswerDraft): void {
