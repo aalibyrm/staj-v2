@@ -176,6 +176,12 @@ export type QuestionVersion = Readonly<Question & {
   readonly changeNote: string;
 }>;
 
+export type ExamQuestionReference = Readonly<{
+  readonly questionId: QuestionId;
+  readonly version: number;
+  readonly versionId: QuestionVersionId;
+}>;
+
 export interface QuestionListQueryInput {
   readonly search?: unknown;
   readonly course?: unknown;

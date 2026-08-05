@@ -8,6 +8,7 @@ import {
   QuestionBankFacade,
   QuestionBankRepository
 } from './question-bank.facade';
+import { asQuestionVersionId } from '../models/question.models';
 
 const signedIn = (role: 'INSTRUCTOR' | 'MEASUREMENT_SPECIALIST' | 'STUDENT'): SessionStore => {
   const account = DEMO_ACCOUNTS.find((candidate) => candidate.roleCode === role);
@@ -67,6 +68,94 @@ describe('QuestionBankRepository publish/version workflow', () => {
     repository.setMockScenario({ outcome: 'service-error' });
     await expect(firstValueFrom(repository.publishQuestion(draft.id, {}, { session, expectedVersion: draft.version }))).rejects.toMatchObject({ kind: 'service' });
     expect(repository.getSnapshot()).toEqual(before);
+  });
+});
+
+describe('QuestionBankRepository exam question reference snapshots', () => {
+  it('pins and resolves the retained publication after creating an editable successor', async () => {
+    const repository = new QuestionBankRepository(new MockTransport());
+    const session = signedIn('INSTRUCTOR').session();
+    const published = (await firstValueFrom(repository.listQuestions({ status: 'published', pageSize: 50 }, { session }))).items[0];
+    if (published === undefined) throw new Error('Expected a published question.');
+    const history = await firstValueFrom(repository.getQuestionVersionHistory(published.id, { session }));
+    const snapshot = history.find((version) => version.version === published.version);
+    if (snapshot === undefined) throw new Error('Expected the published version snapshot.');
+    const pinned = await firstValueFrom(repository.pinExamQuestionReference({
+      questionId: snapshot.questionId,
+      version: snapshot.version,
+      versionId: snapshot.versionId
+    }, { session }));
+    const resolvedBefore = await firstValueFrom(repository.resolveExamQuestionReference(pinned, { session }));
+
+    expect(pinned).toEqual({
+      questionId: snapshot.questionId,
+      version: snapshot.version,
+      versionId: snapshot.versionId
+    });
+    expect(Object.isFrozen(pinned)).toBe(true);
+    expect(resolvedBefore).toEqual(snapshot);
+    expect(Object.isFrozen(resolvedBefore)).toBe(true);
+    expect(Object.isFrozen(resolvedBefore.options)).toBe(true);
+    expect(() => Object.assign(pinned, { version: 99 })).toThrow();
+    expect(() => Object.assign(resolvedBefore, { title: 'mutated' })).toThrow();
+
+    const successor = await firstValueFrom(repository.createQuestionSuccessor(
+      published.id,
+      { changeNote: '  Refine wording  ' },
+      { session, expectedVersion: published.version }
+    ));
+    const current = await firstValueFrom(repository.getQuestion(published.id, { session }));
+    const resolvedAfter = await firstValueFrom(repository.resolveExamQuestionReference(pinned, { session }));
+
+    expect(successor).toMatchObject({ id: published.id, version: published.version + 1, status: 'draft' });
+    expect(current).toMatchObject({ id: published.id, version: published.version + 1, status: 'draft' });
+    expect(resolvedAfter).toEqual(snapshot);
+    expect(resolvedAfter.versionId).toBe(snapshot.versionId);
+    expect(resolvedAfter.status).toBe('published');
+  });
+
+  it('rejects nonexistent, nonpublished, or unauthorized references without mutation', async () => {
+    const repository = new QuestionBankRepository(new MockTransport());
+    const session = signedIn('INSTRUCTOR').session();
+    const published = (await firstValueFrom(repository.listQuestions({ status: 'published', pageSize: 50 }, { session }))).items[0];
+    if (published === undefined) throw new Error('Expected a published question.');
+    const history = await firstValueFrom(repository.getQuestionVersionHistory(published.id, { session }));
+    const snapshot = history.find((version) => version.version === published.version);
+    if (snapshot === undefined) throw new Error('Expected the published version snapshot.');
+    const pinned = {
+      questionId: snapshot.questionId,
+      version: snapshot.version,
+      versionId: snapshot.versionId
+    };
+    const successor = await firstValueFrom(repository.createQuestionSuccessor(
+      published.id,
+      { changeNote: '  Refine wording  ' },
+      { session, expectedVersion: published.version }
+    ));
+    const afterSuccessor = repository.getSnapshot();
+    const nonpublished = {
+      questionId: successor.id,
+      version: successor.version,
+      versionId: asQuestionVersionId(`${successor.id}-v${successor.version}`)
+    };
+    const missing = {
+      questionId: published.id,
+      version: successor.version + 99,
+      versionId: asQuestionVersionId(`${published.id}-v${successor.version + 99}`)
+    };
+    const mismatched = {
+      questionId: pinned.questionId,
+      version: pinned.version,
+      versionId: asQuestionVersionId('QUESTION-version-mismatch')
+    };
+
+    for (const reference of [nonpublished, missing, mismatched]) {
+      await expect(firstValueFrom(repository.pinExamQuestionReference(reference, { session }))).rejects.toMatchObject({ code: 'not-found' });
+      await expect(firstValueFrom(repository.resolveExamQuestionReference(reference, { session }))).rejects.toMatchObject({ code: 'not-found' });
+    }
+    await expect(firstValueFrom(repository.pinExamQuestionReference(pinned, { session: signedIn('STUDENT').session() }))).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(firstValueFrom(repository.resolveExamQuestionReference(pinned, { session: signedIn('STUDENT').session() }))).rejects.toMatchObject({ kind: 'unauthorized' });
+    expect(repository.getSnapshot()).toEqual(afterSuccessor);
   });
 });
 

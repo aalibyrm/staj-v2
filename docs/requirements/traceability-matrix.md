@@ -70,7 +70,7 @@ Status values: `TODO`, `IN_PROGRESS`, `VERIFIED`, `BLOCKED`, `N/A`.
 | ADV-05 | See 03-business-rules.md ADV-05 | P02/P04/P05/P07 | TODO | - |
 | ADV-06 | See 03-business-rules.md ADV-06 | P02/P04/P05/P07 | TODO | - |
 | AC-01 | See 04-acceptance-and-delivery.md AC-01 | P02-P08 | VERIFIED | P02-W03: prospective outcome writes are cycle-checked before entity/course mutation; cyclic saves/publishes return a validation error with the ordered closed outcome-code path. |
-| AC-02 | See 04-acceptance-and-delivery.md AC-02 | P02-P08 | TODO | - |
+| AC-02 | See 04-acceptance-and-delivery.md AC-02 | P02-P08 | VERIFIED | P03-W04: immutable exam question references pin a specific published QuestionVersion; resolving after successor creation returns the retained prior snapshot while the current question advances to an editable draft. |
 | AC-03 | See 04-acceptance-and-delivery.md AC-03 | P02-P08 | TODO | - |
 | AC-04 | See 04-acceptance-and-delivery.md AC-04 | P02-P08 | TODO | - |
 | AC-05 | See 04-acceptance-and-delivery.md AC-05 | P02-P08 | TODO | - |

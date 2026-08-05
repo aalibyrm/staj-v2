@@ -37,6 +37,7 @@ import {
   asCourseId,
   asLearningOutcomeId,
   asQuestionId,
+  asQuestionVersionId,
   isQuestionSort,
   questionReferenceFromCourse,
   questionReferenceFromOutcome,
@@ -48,6 +49,7 @@ import {
   type QuestionCreateInput,
   type QuestionDifficulty,
   type QuestionEditorReferenceData,
+  type ExamQuestionReference,
   type QuestionId,
   type QuestionListQuery,
   type QuestionListQueryInput,
@@ -248,6 +250,35 @@ const cloneQuestionVersion = (version: QuestionVersion): QuestionVersion => deep
   options: version.options.map((option) => ({ ...option })),
   answer: cloneQuestionAnswer(version.answer)
 });
+
+const cloneExamQuestionReference = (reference: ExamQuestionReference): ExamQuestionReference => Object.freeze({
+  questionId: reference.questionId,
+  version: reference.version,
+  versionId: reference.versionId
+});
+
+const readExamQuestionReference = (value: unknown): ExamQuestionReference | null => {
+  if (!isRecord(value)) return null;
+  const questionId = value['questionId'];
+  const version = value['version'];
+  const versionId = value['versionId'];
+  if (
+    typeof questionId !== 'string' ||
+    questionId.length === 0 ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version <= 0 ||
+    typeof versionId !== 'string' ||
+    versionId.length === 0
+  ) {
+    return null;
+  }
+  return {
+    questionId: asQuestionId(questionId),
+    version,
+    versionId: asQuestionVersionId(versionId)
+  };
+};
 
 const normalizeChangeNote = (value: unknown, fallback = ''): string =>
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
@@ -657,6 +688,155 @@ export class QuestionBankRepository {
               .sort((left, right) => left.version - right.version)
               .map(cloneQuestionVersion)
           );
+        },
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
+  pinExamQuestionReference(
+    reference: ExamQuestionReference,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<ExamQuestionReference> {
+    return defer(() => {
+      const rawReference: Record<string, unknown> = isRecord(reference) ? reference : {};
+      const questionId = typeof rawReference['questionId'] === 'string' ? rawReference['questionId'] : '';
+      const versionId = typeof rawReference['versionId'] === 'string' ? rawReference['versionId'] : '';
+      const request = {
+        method: 'POST' as const,
+        url: `/question-bank/questions/${questionId}/versions/${versionId}/exam-reference`,
+        body: reference
+      };
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      if (access === null) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError(
+              'unauthorized',
+              'You are not authorized to modify questions in the active course scope.'
+            );
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+
+      const normalized = readExamQuestionReference(reference);
+      if (normalized === null) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError('validation', 'A question ID, positive version, and version ID are required.');
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+
+      const current = this.questionEntities.get(normalized.questionId);
+      if (current === undefined) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError(
+              'not-found',
+              'The selected question is no longer available in this scope.',
+              String(normalized.questionId)
+            );
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+      if (!access.courseIds.includes(String(current.courseId))) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError(
+              'unauthorized',
+              'You are not authorized to modify questions in the active course scope.',
+              String(normalized.questionId)
+            );
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+
+      return this.transport.execute(
+        request,
+        () => {
+          const snapshot = this.questionVersionEntities.get(normalized.questionId)?.get(normalized.version);
+          if (
+            snapshot === undefined ||
+            snapshot.status !== 'published' ||
+            snapshot.questionId !== normalized.questionId ||
+            snapshot.versionId !== normalized.versionId
+          ) {
+            throw new QuestionBankError(
+              'not-found',
+              'The requested published question version is no longer available.',
+              String(normalized.versionId)
+            );
+          }
+          return cloneExamQuestionReference(normalized);
+        },
+        controls
+      ).pipe(map(({ body }) => body));
+    });
+  }
+
+  resolveExamQuestionReference(
+    reference: ExamQuestionReference,
+    options: QuestionBankRequestOptions = {}
+  ): Observable<QuestionVersion> {
+    return defer(() => {
+      const rawReference: Record<string, unknown> = isRecord(reference) ? reference : {};
+      const questionId = typeof rawReference['questionId'] === 'string' ? rawReference['questionId'] : '';
+      const versionId = typeof rawReference['versionId'] === 'string' ? rawReference['versionId'] : '';
+      const request = {
+        method: 'GET' as const,
+        url: `/question-bank/questions/${questionId}/versions/${versionId}`
+      };
+      const access = getAccess(options);
+      const controls = this.controlsFor(options);
+      if (access === null) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new ApiTransportError('unauthorized', 1);
+          },
+          { ...controls, outcome: 'unauthorized' }
+        ).pipe(map(({ body }) => body));
+      }
+
+      const normalized = readExamQuestionReference(reference);
+      if (normalized === null) {
+        return this.transport.execute(
+          request,
+          () => {
+            throw new QuestionBankError('not-found', 'The requested published question version is no longer available.');
+          },
+          controls
+        ).pipe(map(({ body }) => body));
+      }
+
+      return this.transport.execute(
+        request,
+        () => {
+          const snapshot = this.questionVersionEntities.get(normalized.questionId)?.get(normalized.version);
+          if (
+            snapshot === undefined ||
+            snapshot.status !== 'published' ||
+            snapshot.questionId !== normalized.questionId ||
+            snapshot.versionId !== normalized.versionId ||
+            !access.courseIds.includes(String(snapshot.courseId))
+          ) {
+            throw new QuestionBankError(
+              'not-found',
+              'The requested published question version is no longer available.',
+              String(normalized.versionId)
+            );
+          }
+          return cloneQuestionVersion(snapshot);
         },
         controls
       ).pipe(map(({ body }) => body));
