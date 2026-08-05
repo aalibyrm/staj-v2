@@ -16,6 +16,7 @@ import { RoutePlaceholderComponent } from '../../shared/components/route-placeho
 import { OutcomeListEditorComponent } from '../../features/learning-domain/components/outcome-list-editor.component';
 import { OutcomeGraphComponent } from '../../features/learning-domain/components/outcome-graph.component';
 import { CourseContentCatalogComponent } from '../../features/learning-domain/components/course-content-catalog.component';
+import { QuestionBankComponent } from '../../features/question-bank/components/question-bank.component';
 import { adaptiveLearningRoutes } from '../../features/adaptive-learning/adaptive-learning.routes';
 
 @Component({
@@ -145,13 +146,38 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], main[aria-labelledby="catalog-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
         expectedHeading
       );
     }
+  });
+  it('lazy-loads the guarded concrete question bank for permitted roles and denies unrelated roles', async () => {
+    const questionRoute = adaptiveLearningRoutes.find((route) => route.path === 'question-bank');
+    expect(questionRoute?.pathMatch).toBe('full');
+    expect(questionRoute?.canMatch).toContain(authGuard);
+    expect(questionRoute?.component).toBeUndefined();
+    expect(questionRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]);
+    expect(await questionRoute?.loadComponent?.()).toBe(QuestionBankComponent);
+
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const sessionStore = TestBed.inject(SessionStore);
+    for (const role of ['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const) {
+      sessionStore.signIn(accountIdFor(role));
+      await harness.navigateByUrl('/question-bank');
+      expect(router.url).toBe('/question-bank');
+      expect(harness.routeNativeElement?.querySelector('#question-bank-heading')?.textContent?.trim()).toBe('Question bank');
+    }
+    sessionStore.signIn(accountIdFor('STUDENT'));
+    await harness.navigateByUrl('/unauthorized');
+    await harness.navigateByUrl('/question-bank');
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Fquestion-bank');
   });
   it('resolves the lazy outcome map for its three roles and denies an unrelated role', async () => {
     const harness = await RouterTestingHarness.create();

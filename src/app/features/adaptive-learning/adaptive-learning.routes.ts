@@ -23,6 +23,10 @@ const loadCourseContentCatalog = () =>
   import('../learning-domain/components/course-content-catalog.component').then(
     ({ CourseContentCatalogComponent }) => CourseContentCatalogComponent
   );
+const loadQuestionBank = () =>
+  import('../question-bank/components/question-bank.component').then(
+    ({ QuestionBankComponent }) => QuestionBankComponent
+  );
 
 const loadRoutePlaceholder = () =>
   import('../../shared/components/route-placeholder.component').then(
@@ -104,10 +108,19 @@ export const adaptiveLearningRoutes: Routes = [
     },
     loadComponent: loadOutcomeGraph
   },
-  placeholderRoute('question-bank', 'Question bank', [
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.measurementWorkspace
-  ]),
+{
+    path: 'question-bank',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Question bank',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.measurementWorkspace
+      ]
+    },
+    loadComponent: loadQuestionBank
+  },
   placeholderRoute('questions/:id', 'Question', [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace
