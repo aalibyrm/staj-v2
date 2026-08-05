@@ -61,6 +61,9 @@ import type { ExamQuestion } from '../models/answer-draft.models';
               @if (facade.autosaveState().status === 'error' && facade.autosaveState().retryable) {
                 <button type="button" class="secondary-action" aria-label="Retry autosave" (click)="retryAutosave()">Retry</button>
               }
+              @if (facade.replayError() !== null) {
+                <button type="button" class="secondary-action" aria-label="Retry queued answer sync" (click)="retryQueuedReplay()">Retry sync</button>
+              }
             </div>
           </div>
         </header>
@@ -373,7 +376,15 @@ export class ExamSessionComponent {
     this.facade.retryAutosave();
   }
 
+  retryQueuedReplay(): void {
+    this.facade.retryQueuedReplay();
+  }
+
   autosaveLabel(): string {
+    const replayError = this.facade.replayError();
+    if (replayError !== null) return `Sync error: ${replayError}`;
+    if (this.facade.isOffline()) return `Offline — ${this.facade.queuedAnswerCount()} answer(s) queued`;
+    if (this.facade.isReconnecting()) return `Reconnecting — syncing ${this.facade.queuedAnswerCount()} answer(s)`;
     const state = this.facade.autosaveState();
     if (state.status === 'saving') return 'Saving';
     if (state.status === 'saved') return state.savedAt === null ? 'Saved' : `Saved ${state.savedAt}`;

@@ -1,5 +1,5 @@
 import { Inject, Injectable, InjectionToken, Optional, computed, signal, type Signal, type WritableSignal } from '@angular/core';
-import { Subject, catchError, debounceTime, defer, groupBy, interval, map, mergeMap, of, startWith, switchMap, tap, throwError, type Observable, type Subscription } from 'rxjs';
+import { Subject, catchError, debounceTime, defer, firstValueFrom, from, groupBy, interval, map, mergeMap, of, startWith, switchMap, tap, throwError, type Observable, type Subscription } from 'rxjs';
 
 import { normalizeApplicationError } from '../../../core/api/api-error';
 import {
@@ -17,6 +17,9 @@ import {
   type ExamSessionState
 } from '../models/exam-session.models';
 import { ExamSessionRepository, type ExamSessionRepositoryError } from './exam-session.repository';
+import { PlatformEventBus, PlatformState, type PlatformConnectivity } from '../../../core/state/platform-state';
+import { OfflineAnswerQueue, type OfflineAnswerQueueEnqueueInput } from './offline-answer-queue';
+import type { OfflineAnswerQueueRecord } from '../models/offline-answer-queue.models';
 import {
   asExamQuestionId,
   createAnswerDraft,
@@ -64,6 +67,7 @@ type AutosaveRequest = Readonly<{
 type AutosaveResult = Readonly<{
   readonly request: AutosaveRequest;
   readonly persisted?: AnswerDraft;
+  readonly queued?: OfflineAnswerQueueRecord;
   readonly error?: unknown;
 }>;
 
@@ -201,6 +205,23 @@ const freezeQuestions = (inputs: readonly ExamQuestionInput[]): readonly ExamQue
 };
 
 const nonterminal = (state: ExamSessionState): boolean => !EXAM_SESSION_TERMINAL_STATES.includes(state as (typeof EXAM_SESSION_TERMINAL_STATES)[number]);
+const answerValuesEqual = (left: AnswerValue, right: AnswerValue): boolean => {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+  }
+  return left === right;
+};
+
+const equivalentPersistedDraft = (
+  queued: OfflineAnswerQueueRecord,
+  persisted: AnswerDraft
+): boolean =>
+  persisted.questionId === queued.questionId &&
+  persisted.version >= queued.expectedVersion + 1 &&
+  persisted.flagged === queued.draft.flagged &&
+  answerValuesEqual(persisted.value, queued.draft.value);
+
 
 @Injectable({ providedIn: 'root' })
 export class ExamSessionFacade {
@@ -225,6 +246,15 @@ export class ExamSessionFacade {
   private timerAnchor: ReferenceTimeSyncAnchor | null = null;
   private timerSubscription: Subscription | null = null;
   private expiryTransitionRequested = false;
+  private readonly offlineQueue: OfflineAnswerQueue;
+  private readonly platformState: PlatformState;
+  private readonly platformEventBus: PlatformEventBus;
+  private readonly queueCountState = signal(0);
+  private readonly replayErrorState = signal<string | null>(null);
+  private readonly replayingState = signal(false);
+  private platformSubscription: Subscription | null = null;
+  private replayPromise: Promise<void> | null = null;
+  private destroyed = false;
 
   readonly requestState: Signal<ExamSessionRequestState> = this.requestStateState.asReadonly();
   readonly autosaveState: Signal<ExamSessionAutosaveState> = this.autosaveStateState.asReadonly();
@@ -247,15 +277,43 @@ export class ExamSessionFacade {
   readonly canSubmit: Signal<boolean>;
   readonly localDraftStatus: Signal<'none' | 'local'>;
   readonly liveStatus: Signal<string>;
+  readonly queuedAnswerCount: Signal<number>;
+  readonly offlineQueueCount: Signal<number>;
+  readonly connectivity: Signal<PlatformConnectivity>;
+  readonly isOffline: Signal<boolean>;
+  readonly isReconnecting: Signal<boolean>;
+  readonly isReplaying: Signal<boolean>;
+  readonly replayError: Signal<string | null>;
 
   constructor(
     @Optional() repository: ExamSessionRepository | null = null,
     @Optional() @Inject(EXAM_SESSION_QUESTION_SOURCE) questionSource: ExamSessionQuestionSource | null = null,
-    @Optional() @Inject(EXAM_SESSION_MONOTONIC_NOW_SOURCE) monotonicNowSource: (() => number) | null = null
+    @Optional() @Inject(EXAM_SESSION_MONOTONIC_NOW_SOURCE) monotonicNowSource: (() => number) | null = null,
+    @Optional() offlineQueue: OfflineAnswerQueue | null = null,
+    @Optional() platformState: PlatformState | null = null,
+    @Optional() platformEventBus: PlatformEventBus | null = null
   ) {
+    this.offlineQueue = offlineQueue ?? new OfflineAnswerQueue();
+    this.platformEventBus = platformEventBus ?? new PlatformEventBus();
+    this.platformState = platformState ?? new PlatformState(this.platformEventBus);
     this.repository = repository ?? new ExamSessionRepository({ tokenSource: () => DEFAULT_ROUTE_TOKEN });
     this.questionSource = questionSource ?? defaultQuestionSource;
     this.monotonicNowSource = monotonicNowSource ?? defaultMonotonicNow;
+    this.queuedAnswerCount = this.queueCountState.asReadonly();
+    this.offlineQueueCount = this.queuedAnswerCount;
+    this.replayError = this.replayErrorState.asReadonly();
+    this.isReplaying = this.replayingState.asReadonly();
+    this.connectivity = computed(() => {
+      const connectivity = this.platformState.state().connectivity;
+      return connectivity === 'offline'
+        ? 'offline'
+        : this.replayingState() || this.queueCountState() > 0
+          ? 'reconnecting'
+          : connectivity;
+    });
+    this.isOffline = computed(() => this.connectivity() === 'offline');
+    this.isReconnecting = computed(() => this.connectivity() === 'reconnecting');
+    this.platformSubscription = this.platformEventBus.events$.subscribe((event) => this.onPlatformEvent(event));
     this.startAutosavePipeline();
     this.currentQuestion = computed(() => this.questionsState()[this.currentIndexState()] ?? null);
     this.draftMap = computed(() => freezeAnswerDraftMap(this.draftsState()));
@@ -278,6 +336,9 @@ export class ExamSessionFacade {
     });
     this.localDraftStatus = computed(() => this.answerRevision() === 0 ? 'none' : 'local');
     this.liveStatus = computed(() => {
+      if (this.replayError() !== null) return `Queued answer sync error: ${this.replayError()}`;
+      if (this.isOffline()) return `Offline — ${this.queuedAnswerCount()} answer(s) queued`;
+      if (this.isReconnecting()) return `Reconnecting — syncing ${this.queuedAnswerCount()} answer(s)`;
       const timer = this.timerState();
       if (this.isExpired()) return 'Time has expired. Answers are locked.';
       if (timer?.warning) return `Time is running low: ${this.formatDuration(timer.remainingMs)} remaining.`;
@@ -289,6 +350,10 @@ export class ExamSessionFacade {
   }
 
   ngOnDestroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.platformSubscription?.unsubscribe();
+    this.platformSubscription = null;
     this.timerSubscription?.unsubscribe();
     this.timerSubscription = null;
     this.autosaveSubscription?.unsubscribe();
@@ -298,10 +363,13 @@ export class ExamSessionFacade {
   }
 
   load(routeToken: string): Observable<ExamSessionLoadResult> {
+    if (this.destroyed) return throwError(() => new ExamSessionFacadeError('not-ready', 'The exam session has been destroyed.'));
     const token = routeToken.trim();
     const revision = ++this.requestRevision;
     this.resetAutosavePipeline();
     this.autosaveRetrySnapshot = null;
+    this.platformState.setPendingOperations(0);
+    this.replayErrorState.set(null);
     this.autosaveStateState.set(createAutosaveState('idle'));
     this.lastRouteToken = token;
     this.requestStateState.set({ status: 'loading' });
@@ -331,6 +399,7 @@ export class ExamSessionFacade {
       tap(({ result, drafts }) => {
         if (revision !== this.requestRevision) return;
         this.applyLoadedResult(result, drafts);
+        void this.refreshQueueState(result.session.id, revision);
       }),
       map(({ result }) => result),
       catchError((error: unknown) => {
@@ -519,6 +588,18 @@ export class ExamSessionFacade {
       ? Object.freeze({ ...request, draft: current })
       : request;
     this.autosaveStateState.set(createAutosaveState('saving', 'Saving', false, current.savedAt));
+    const queueInput: OfflineAnswerQueueEnqueueInput = {
+      sessionId: effectiveRequest.sessionId,
+      questionId: effectiveRequest.questionId,
+      draft: effectiveRequest.draft,
+      expectedVersion: effectiveRequest.draft.version
+    };
+    if (this.connectivity() !== 'online' || this.isReplaying()) {
+      return from(this.offlineQueue.enqueue(queueInput)).pipe(
+        map((queued) => ({ request: effectiveRequest, queued })),
+        catchError((error: unknown) => of({ request: effectiveRequest, error }))
+      );
+    }
     return this.repository.saveDraft(
       effectiveRequest.sessionId,
       effectiveRequest.questionId,
@@ -537,6 +618,14 @@ export class ExamSessionFacade {
     const index = this.draftsState().findIndex((draft) => draft.questionId === result.request.questionId);
     if (index < 0) return;
     const current = this.draftsState()[index];
+    if (result.queued !== undefined) {
+      void this.refreshQueueState(session.id, result.request.loadRevision);
+      if (result.request.revision === this.answerRevision()) {
+        this.autosaveRetrySnapshot = null;
+        this.autosaveStateState.set(createAutosaveState('saving', 'Queued offline', false, current.savedAt));
+      }
+      return;
+    }
     if (result.persisted !== undefined) {
       if (result.persisted.version >= current.version) {
         const nextDrafts = [...this.draftsState()];
@@ -549,7 +638,7 @@ export class ExamSessionFacade {
         );
         this.draftsState.set(Object.freeze(nextDrafts));
       }
-      if (result.request.revision === this.answerRevision()) {
+      if (result.request.revision === this.answerRevision() && this.queuedAnswerCount() === 0) {
         this.autosaveRetrySnapshot = null;
         this.autosaveStateState.set(createAutosaveState('saved', 'Saved', false, result.persisted.savedAt));
       }
@@ -563,6 +652,130 @@ export class ExamSessionFacade {
       true,
       current.savedAt
     ));
+  }
+
+  private onPlatformEvent(event: { readonly type: string }): void {
+    if (event.type !== 'connectivity-changed') return;
+    const session = this.sessionState();
+    if (session === null || this.destroyed) return;
+    const connectivity = this.platformState.state().connectivity;
+    if (connectivity !== 'offline') this.startReplay(session.id);
+    void this.refreshQueueState(session.id, this.requestRevision);
+  }
+
+  private refreshQueueState(sessionId: string, revision: number): Promise<void> {
+    return this.offlineQueue.read(sessionId).then(
+      (records) => {
+        this.platformState.setPendingOperations(records.length);
+        this.queueCountState.set(records.length);
+        for (const record of records) {
+          const index = this.draftsState().findIndex((draft) => draft.questionId === record.questionId);
+          if (index < 0) continue;
+          const current = this.draftsState()[index];
+          const nextDrafts = [...this.draftsState()];
+          nextDrafts[index] = createAnswerDraft(
+            current.questionId,
+            record.draft.value,
+            record.draft.flagged,
+            record.expectedVersion,
+            record.draft.savedAt
+          );
+          this.draftsState.set(Object.freeze(nextDrafts));
+        }
+        if (records.length > 0 && this.platformState.state().connectivity !== 'offline') this.startReplay(sessionId);
+      },
+      (error: unknown) => {
+        if (this.destroyed || revision !== this.requestRevision || this.sessionState()?.id !== sessionId) return;
+        this.replayErrorState.set(autosaveErrorMessage(error));
+      }
+    );
+  }
+
+  retryQueuedReplay(): boolean {
+    const session = this.sessionState();
+    if (session === null || this.destroyed) return false;
+    this.replayErrorState.set(null);
+    this.startReplay(session.id);
+    return true;
+  }
+
+  private startReplay(sessionId: string): void {
+    if (this.destroyed || this.replayPromise !== null || this.platformState.state().connectivity === 'offline') return;
+    this.replayPromise = this.replayQueue(sessionId).finally(() => {
+      this.replayPromise = null;
+      if (!this.destroyed && this.sessionState()?.id === sessionId && this.queueCountState() > 0 &&
+        this.platformState.state().connectivity !== 'offline' && this.replayError() === null) {
+        this.startReplay(sessionId);
+      }
+    });
+  }
+
+  private async replayQueue(sessionId: string): Promise<void> {
+    if (this.sessionState()?.id !== sessionId) return;
+    let lastSavedAt: string | null = null;
+    this.replayingState.set(true);
+    try {
+      while (!this.destroyed && this.sessionState()?.id === sessionId &&
+        this.platformState.state().connectivity !== 'offline') {
+        const records = await this.offlineQueue.read(sessionId);
+        if (this.destroyed || this.sessionState()?.id !== sessionId) return;
+        this.platformState.setPendingOperations(records.length);
+        this.queueCountState.set(records.length);
+        const record = records[0];
+        if (record === undefined) {
+          this.replayErrorState.set(null);
+          if (lastSavedAt !== null) this.autosaveStateState.set(createAutosaveState('saved', 'Saved', false, lastSavedAt));
+          if (this.platformState.state().connectivity === 'reconnecting') this.platformState.setConnectivity('online');
+          return;
+        }
+        try {
+          const persisted = await this.replayRecord(record);
+          lastSavedAt = persisted.savedAt;
+          this.applyPersistedDraft(persisted);
+          await this.offlineQueue.remove(record.operationId);
+          this.platformState.setPendingOperations(Math.max(0, records.length - 1));
+          this.queueCountState.set(Math.max(0, records.length - 1));
+        } catch (error: unknown) {
+          this.replayErrorState.set(autosaveErrorMessage(error));
+          this.autosaveStateState.set(createAutosaveState('error', autosaveErrorMessage(error), false));
+          return;
+        }
+      }
+    } finally {
+      if (this.sessionState()?.id === sessionId) this.replayingState.set(false);
+    }
+  }
+
+  private async replayRecord(record: OfflineAnswerQueueRecord): Promise<AnswerDraft> {
+    try {
+      return await firstValueFrom(this.repository.saveDraft(
+        record.sessionId,
+        record.questionId,
+        record.draft,
+        { expectedVersion: record.expectedVersion }
+      ));
+    } catch (error: unknown) {
+      if (errorCode(error) !== 'conflict') throw error;
+      const persisted = await firstValueFrom(this.repository.listDrafts(record.sessionId));
+      const equivalent = persisted.find((draft) => equivalentPersistedDraft(record, draft));
+      if (equivalent === undefined) throw error;
+      return equivalent;
+    }
+  }
+
+  private applyPersistedDraft(persisted: AnswerDraft): void {
+    const index = this.draftsState().findIndex((draft) => draft.questionId === persisted.questionId);
+    if (index < 0 || persisted.version < this.draftsState()[index].version) return;
+    const current = this.draftsState()[index];
+    const nextDrafts = [...this.draftsState()];
+    nextDrafts[index] = createAnswerDraft(
+      current.questionId,
+      current.value,
+      current.flagged,
+      persisted.version,
+      persisted.savedAt
+    );
+    this.draftsState.set(Object.freeze(nextDrafts));
   }
 
   private resetAutosavePipeline(): void {

@@ -91,11 +91,16 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
     });
   });
 
-  const create = async (source: ExamSessionQuestionSource = questionSource) => {
+  const create = async (
+    source: ExamSessionQuestionSource = questionSource,
+    keepFacadeAlive = false
+  ) => {
     TestBed.overrideProvider(EXAM_SESSION_QUESTION_SOURCE, { useValue: source });
     const fixture = TestBed.createComponent(ExamSessionComponent);
     fixture.detectChanges();
-    fixture.componentInstance.facade.ngOnDestroy();
+    if (!keepFacadeAlive) {
+      fixture.componentInstance.facade.ngOnDestroy();
+    }
     await fixture.whenRenderingDone();
     fixture.detectChanges();
     return fixture;
@@ -141,14 +146,24 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
     const retrySource: ExamSessionQuestionSource = (session) => shouldFail
       ? throwError(() => new Error('Service unavailable'))
       : questionSource(session);
-    const fixture = await create(retrySource);
-    expect(fixture.nativeElement.textContent).toContain('Unable to open exam session');
-    shouldFail = false;
-    (fixture.nativeElement.querySelector('button.retry-action') as HTMLButtonElement).click();
-    fixture.componentInstance.facade.ngOnDestroy();
-    await fixture.whenRenderingDone();
-    fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('.question-card')).not.toBeNull();
+    const fixture = await create(retrySource, true);
+    const facade = fixture.componentInstance.facade;
+    try {
+      expect(fixture.nativeElement.textContent).toContain('Unable to open exam session');
+      expect(facade.requestState().status).toBe('error');
+      expect(facade.session()).toBeNull();
+      expect(facade.questions()).toHaveLength(0);
+      expect(fixture.nativeElement.querySelector('.question-card')).toBeNull();
+      shouldFail = false;
+      (fixture.nativeElement.querySelector('button.retry-action') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(facade.requestState().status).toBe('ready');
+      expect(facade.session()).not.toBeNull();
+      expect(facade.questions()).toHaveLength(3);
+      expect(fixture.nativeElement.querySelector('.question-card')).not.toBeNull();
+    } finally {
+      facade.ngOnDestroy();
+    }
   });
 
   it('updates answers immutably, derives progress, navigates, and toggles review', () => {
