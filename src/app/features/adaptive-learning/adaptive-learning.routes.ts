@@ -31,6 +31,10 @@ const loadExamBuilder = () =>
   import('../exam-builder/components/exam-builder.component').then(
     ({ ExamBuilderComponent }) => ExamBuilderComponent
   );
+const loadExamSession = () =>
+  import('../exam-session/components/exam-session.component').then(
+    ({ ExamSessionComponent }) => ExamSessionComponent
+  );
 
 
 const loadRoutePlaceholder = () =>
@@ -163,9 +167,16 @@ export const adaptiveLearningRoutes: Routes = [
     ROUTE_CAPABILITIES.measurementWorkspace,
     ROUTE_CAPABILITIES.programWorkspace
   ]),
-  placeholderRoute('exam-session/:token', 'Exam session', [
-    ROUTE_CAPABILITIES.studentLearning
-  ]),
+  {
+    path: 'exam-session/:token',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Exam session',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [ROUTE_CAPABILITIES.studentLearning]
+    },
+    loadComponent: loadExamSession
+  },
   placeholderRoute('grading', 'Grading', [ROUTE_CAPABILITIES.instructorTeaching]),
   placeholderRoute('grading/:attemptId', 'Grading attempt', [
     ROUTE_CAPABILITIES.instructorTeaching
