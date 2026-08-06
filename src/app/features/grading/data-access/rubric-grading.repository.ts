@@ -43,11 +43,28 @@ const normalizeAttemptId = (value: unknown): string => {
   return value.trim();
 };
 
-const createNeutralFixture = (attemptId: string): RubricGrading => createRubricGrading({
+/** Demo instructor scope grant, duplicated per convention (see scoped-data.facade.spec.ts) to avoid importing core/auth from a data-access fixture. */
+const DEMO_SCOPED_STUDENT_IDS = Object.freeze([
+  'STUDENT-MATH101-2025-FALL-A-01',
+  'STUDENT-MATH101-2025-FALL-A-02',
+  'STUDENT-MATH101-2025-FALL-A-03'
+] as const);
+
+/** Deterministically maps an attempt id to one of the demo-scoped student ids so the fixture stays reachable by the demo instructor. */
+const selectDemoScopedStudentId = (attemptId: string): (typeof DEMO_SCOPED_STUDENT_IDS)[number] => {
+  const charCodeSum = Array.from(attemptId).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return DEMO_SCOPED_STUDENT_IDS[charCodeSum % DEMO_SCOPED_STUDENT_IDS.length];
+};
+
+const studentLabelFor = (studentId: string): string => `Student ${studentId.split('-').slice(-2).join('-')}`;
+
+const createNeutralFixture = (attemptId: string): RubricGrading => {
+  const studentId = selectDemoScopedStudentId(attemptId);
+  return createRubricGrading({
   context: {
     attemptId,
-    studentId: `learner-${attemptId}`,
-    studentName: `Learner ${attemptId}`,
+    studentId,
+    studentName: studentLabelFor(studentId),
     examId: 'written-response-assessment',
     examTitle: 'Written response assessment',
     courseTitle: 'Reasoning practice',
@@ -113,7 +130,8 @@ const createNeutralFixture = (attemptId: string): RubricGrading => createRubricG
   selectedLevelIds: {},
   criterionComments: {},
   overallFeedback: ''
-});
+  });
+};
 
 @Injectable({ providedIn: 'root' })
 export class RubricGradingRepository {

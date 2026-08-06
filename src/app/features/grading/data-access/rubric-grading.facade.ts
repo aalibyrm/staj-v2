@@ -14,6 +14,9 @@ import {
 } from 'rxjs';
 
 import { normalizeApplicationError } from '../../../core/api/api-error';
+import { SessionStore } from '../../../core/auth/session.store';
+import { decideGradingAttemptAccess, type GradingAccessDecision } from '../domain/grading-access';
+import { deriveGradingWorkflowState } from '../domain/grading-workflow';
 import {
   selectRubricScore,
   type RubricScoringResult
@@ -28,6 +31,7 @@ import type {
   Rubric,
   RubricGrading
 } from '../models/rubric.models';
+import type { GradingWorkflowState, GradingWorkflowStatus } from '../models/grading-workflow.models';
 
 export type RubricGradingRequestStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'unauthorized';
 
@@ -69,6 +73,7 @@ const stateForError = (error: unknown): RubricGradingRequestState => {
 @Injectable({ providedIn: 'root' })
 export class RubricGradingFacade {
   private readonly repository: RubricGradingRepository;
+  private readonly sessionStore: SessionStore;
   private readonly requestStateState = signal<RubricGradingRequestState>({ status: 'idle' });
   private readonly gradingState = signal<RubricGrading | null>(null);
   private requestRevision = 0;
@@ -90,9 +95,24 @@ export class RubricGradingFacade {
       : selectRubricScore({ rubric: grading.rubric, selectedLevelIds: grading.selectedLevelIds });
   });
   readonly errorMessage: Signal<string> = computed(() => this.requestStateState().message ?? '');
+  readonly accessDecision: Signal<GradingAccessDecision> = computed(() =>
+    decideGradingAttemptAccess(this.sessionStore.session(), this.context())
+  );
+  readonly workflowState: Signal<GradingWorkflowState | null> = computed(() => {
+    const grading = this.gradingState();
+    return grading === null ? null : deriveGradingWorkflowState(grading);
+  });
+  readonly workflowStatus: Signal<GradingWorkflowStatus | null> = computed(() => this.workflowState()?.status ?? null);
+  readonly isGradable: Signal<boolean> = computed(
+    () => this.requestStateState().status === 'ready' && this.accessDecision().allowed
+  );
 
-  constructor(@Optional() repository: RubricGradingRepository | null = null) {
+  constructor(
+    @Optional() repository: RubricGradingRepository | null = null,
+    @Optional() session: SessionStore | null = null
+  ) {
     this.repository = repository ?? new RubricGradingRepository();
+    this.sessionStore = session ?? new SessionStore();
   }
 
   load(attemptId: string, options: RubricGradingReadOptions = {}): Observable<RubricGrading | null> {
@@ -115,12 +135,21 @@ export class RubricGradingFacade {
     return defer(() => this.repository.getByAttemptId(normalizedAttemptId, readOptions)).pipe(
       map((grading) => {
         if (revision !== this.requestRevision) return grading;
+        if (grading === null) {
+          this.gradingState.set(null);
+          this.requestStateState.set(
+            Object.freeze({ status: 'empty', message: 'No grading attempt is available for this route.', retryable: false })
+          );
+          return grading;
+        }
+        const decision = decideGradingAttemptAccess(this.sessionStore.session(), grading.context);
+        if (!decision.allowed) {
+          this.gradingState.set(null);
+          this.requestStateState.set(Object.freeze({ status: 'unauthorized', message: decision.message, retryable: false }));
+          return null;
+        }
         this.gradingState.set(grading);
-        this.requestStateState.set(
-          grading === null
-            ? Object.freeze({ status: 'empty', message: 'No grading attempt is available for this route.', retryable: false })
-            : Object.freeze({ status: 'ready' })
-        );
+        this.requestStateState.set(Object.freeze({ status: 'ready' }));
         return grading;
       }),
       catchError((error: unknown) => {

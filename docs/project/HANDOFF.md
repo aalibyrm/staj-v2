@@ -1,13 +1,13 @@
 # Compact Handoff
 
-- Repository state: `origin -> https://github.com/aalibyrm/staj-v2.git`; branch `main` clean and tracking `origin/main` with no divergence; P06-W02 delivered in commit `be696e0`, which is an ancestor of both `main` and `origin/main`; later commit `d3a4f15` only migrated harness orchestration to Claude
-- Architecture: P06-W01 objective scoring remains unchanged. P06-W02 adds immutable rubric/grading models, pure bounded weighted scoring, a mock-transport repository, and a retryable Signals/RxJS facade with stale-response protection; grading review does not persist changes.
-- UI direction: `/grading/:attemptId` now lazy-loads RubricGrader for instructor teaching scope. It presents response context, desktop rubric matrix, narrow criterion cards, live total, bounded comments/feedback, read-only context, accessible validation focus, and loading/empty/error/retry/unauthorized states.
+- Repository state: `origin -> https://github.com/aalibyrm/staj-v2.git`; branch `main` tracking `origin/main`; P06-W02 delivered in commit `be696e0`; P06-W03 verified and pending its own commit/push
+- Architecture: P06-W03 adds `models/grading-workflow.models.ts` (frozen `GradingWorkflowState`, typed `GradingWorkflowError`), `domain/grading-workflow.ts` (pure status derivation plus `GRADING_WORKFLOW_TRANSITIONS`/`assertWorkflowTransition`), and `domain/grading-access.ts` (`decideGradingAttemptAccess` = authentication, `manage-course` action permission, then `student` data scope, deny-by-default). `RubricGradingFacade` now injects `SessionStore`, decides access against the loaded attempt context, suppresses the payload with an `unauthorized` state on denial, and exposes `accessDecision`/`workflowState`/`workflowStatus`/`isGradable`. The mock fixture maps an attempt id deterministically to a demo-scoped student id. Grading still persists nothing.
+- UI direction: `/grading/:attemptId` keeps the P06-W02 layout and adds one `aria-live="polite"` workflow status region in the context card showing a textual status label, `data-workflow-status`, and live `scored / total criteria scored` derived from the rubric form; denied loads render only the shared unauthorized request state.
 - Active phase: Phase 06 in progress
 - Active packet: none
-- Verified evidence: P06-W02 focused gate passed 33/33 tests across 5 files; full suite passed 416/416 across 39 files; production build passed with 5 existing non-fatal component-style budget warnings. Browser gates at 1440x900 and 390x844 produced 100/100 for maximum selections, zero horizontal overflow, successful error retry, explicit empty/unauthorized states, post-render validation focus, and no console/page errors.
+- Verified evidence: P06-W03 focused gate passed 50/50 across 6 files; full suite passed 445/445 across 41 files; production build succeeded with 8 pre-existing component-style budget warnings and no error. Live gates at 1440x900 and 390x844 as Instructor Demo showed pending 0/3 to partial 1/3 to graded 3/3, an exact total tracking selections, zero horizontal overflow, and no console/page errors. Two behavioral repairs were consumed: an out-of-scope mock fixture student id, and a status region that ignored live form state.
 - Open decisions: none; ADR-007 remains realized as direct `cytoscape@3.34.0`
-- Known blocker: none. Persisted grading workflow, score history, rollback, and durable audit remain P06-W03-W06.
-- Next: start P06-W03 persisted grading workflow
+- Known blocker: none. Score-change reason and history, optimistic rollback, and the audit log remain P06-W04-W06.
+- Next: commit and push P06-W03, then start P06-W04 score-change reason and history
 
 Maximum target size: 30 lines. Replace stale facts.
