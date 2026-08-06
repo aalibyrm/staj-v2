@@ -18,6 +18,7 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
   selector: 'app-exam-session',
   standalone: true,
   imports: [CommonModule, RequestStateComponent],
+  providers: [ExamSessionFacade],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main class="exam-session-page" aria-labelledby="exam-session-heading">
@@ -287,6 +288,18 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
             <span class="eyebrow">Confirm submission</span>
             <h2 id="finish-confirmation-title">Submit this exam session?</h2>
             <p id="finish-confirmation-description">Your local answer draft will be submitted and the session will close. You can cancel and continue answering.</p>
+            @if (submissionError(); as errorMessage) {
+              <p class="terminal-message finish-submission-error" role="alert" aria-live="assertive" aria-atomic="true">
+                Submission failed: {{ errorMessage }}
+              </p>
+              <button
+                type="button"
+                class="secondary-action"
+                aria-label="Retry submission"
+                [disabled]="finishSubmissionLocked()"
+                (click)="retryFinish()"
+              >Retry submission</button>
+            }
             <div class="dialog-actions">
               <button type="button" class="primary-action" [disabled]="finishSubmissionLocked()" (click)="confirmFinish()">Confirm submission</button>
               <button type="button" class="secondary-action" [disabled]="finishSubmissionLocked()" (click)="cancelFinish()">Cancel</button>
@@ -369,8 +382,10 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
     .finish-dialog { position:fixed; z-index:20; inset:50% auto auto 50%; width:min(520px,calc(100vw - 32px)); transform:translate(-50%,-50%); display:grid; gap:13px; padding:24px; border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-lg); background:var(--ui-surface); box-shadow:var(--ui-shadow-md); }
     .finish-dialog::before { content:""; position:fixed; z-index:-1; inset:calc(50% - 50vh) calc(50% - 50vw); background:rgb(15 23 42 / .36); }
     .finish-dialog p { color:var(--ui-text-muted); font-size:13px; }
+    .finish-submission-error { color:var(--ui-danger); }
     .draft-conflict-actions, .dialog-actions { display:flex; justify-content:flex-end; gap:10px; }
     .navigator-trigger { display:none; }
+    .workspace-grid { display:grid; grid-template-columns:minmax(200px,240px) minmax(0,1fr) minmax(240px,300px); align-items:start; gap:16px; min-width:0; }
     .sr-only, .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
     @media (max-width:1100px) {
       .workspace-grid { grid-template-columns:minmax(180px,200px) minmax(0,1fr); }
@@ -408,6 +423,7 @@ export class ExamSessionComponent {
   readonly navigatorOpen = signal(false);
   readonly finishConfirmationOpen = signal(false);
   readonly finishSubmissionLocked = signal(false);
+  readonly submissionError = signal<string | null>(null);
   @ViewChild('navigatorTrigger') private navigatorTrigger?: ElementRef<HTMLButtonElement>;
   @ViewChild('navigatorPanel') private navigatorPanel?: ElementRef<HTMLElement>;
   @ViewChild('questionHeading') private questionHeading?: ElementRef<HTMLHeadingElement>;
@@ -420,9 +436,6 @@ export class ExamSessionComponent {
     if (routeToken.length === 0 || this.loadedRouteToken === routeToken) return;
     this.loadedRouteToken = routeToken;
     this.facade.load(routeToken).subscribe({ error: () => undefined });
-  }
-  ngOnDestroy(): void {
-    this.facade.ngOnDestroy();
   }
 
   retryAutosave(): void {
@@ -587,6 +600,7 @@ export class ExamSessionComponent {
 
   openFinishConfirmation(): void {
     if (!this.facade.canSubmit() || this.finishSubmissionLocked()) return;
+    this.submissionError.set(null);
     this.finishConfirmationOpen.set(true);
     afterNextRender({ write: () => this.finishDialog?.nativeElement.focus() }, { injector: this.renderInjector });
   }
@@ -594,6 +608,7 @@ export class ExamSessionComponent {
   cancelFinish(): void {
     if (!this.finishConfirmationOpen()) return;
     this.finishConfirmationOpen.set(false);
+    this.submissionError.set(null);
     afterNextRender({ write: () => this.finishTrigger?.nativeElement.focus() }, { injector: this.renderInjector });
   }
 
@@ -602,8 +617,19 @@ export class ExamSessionComponent {
     this.finishSubmissionLocked.set(true);
     this.facade.submit(true).subscribe({
       next: () => this.finishCompleted(),
-      error: () => this.finishCompleted()
+      error: (error: unknown) => {
+        this.finishSubmissionLocked.set(false);
+        this.submissionError.set(
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : 'Exam submission failed. Please try again.'
+        );
+      }
     });
+  }
+
+  retryFinish(): void {
+    this.confirmFinish();
   }
 
   onFinishDialogKeydown(event: KeyboardEvent): void {
@@ -624,6 +650,7 @@ export class ExamSessionComponent {
 
   private finishCompleted(): void {
     this.finishSubmissionLocked.set(false);
+    this.submissionError.set(null);
     this.finishConfirmationOpen.set(false);
     afterNextRender({ write: () => this.finishTrigger?.nativeElement.focus() }, { injector: this.renderInjector });
   }

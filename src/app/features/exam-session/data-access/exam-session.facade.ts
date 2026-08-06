@@ -105,7 +105,7 @@ export class ExamSessionFacadeError extends Error {
   override readonly name = 'ExamSessionFacadeError';
 
   constructor(
-    readonly code: 'confirmation-required' | 'not-ready' | 'late-answer' | 'terminal',
+    readonly code: 'confirmation-required' | 'not-ready' | 'late-answer' | 'pending-sync' | 'terminal',
     message: string
   ) {
     super(message);
@@ -382,7 +382,8 @@ export class ExamSessionFacade {
     });
     this.canSubmit = computed(() => {
       const state = this.sessionState()?.state;
-      return state !== undefined && nonterminal(state) && !this.isExpired();
+      return state !== undefined && nonterminal(state) && !this.isExpired() &&
+        this.queuedAnswerCount() === 0 && !this.isReplaying();
     });
     this.localDraftStatus = computed(() => this.answerRevision() === 0 ? 'none' : 'local');
     this.liveStatus = computed(() => {
@@ -676,6 +677,12 @@ export class ExamSessionFacade {
   submit(confirmed = false): Observable<ExamSession> {
     if (!confirmed) return throwError(() => new ExamSessionFacadeError('confirmation-required', 'Confirmation is required before submission.'));
     this.refreshTimer();
+    if (this.queuedAnswerCount() > 0 || this.isReplaying()) {
+      return throwError(() => new ExamSessionFacadeError(
+        'pending-sync',
+        'Answers are still synchronizing. Wait for synchronization to finish before submitting.'
+      ));
+    }
     if (!this.canSubmit()) return throwError(() => new ExamSessionFacadeError('terminal', 'The exam session cannot be submitted.'));
     return this.transition('submitted');
   }

@@ -7,7 +7,8 @@
 - Git remote: `origin -> https://github.com/aalibyrm/staj-v2.git`
 - Git branch: `main`
 - Git sync status: `TRACKING origin/main`
-- Last verified commit: `P06-W01 - see Git HEAD`
+- Last verified commit: `P05-REV - see Git HEAD`
+- Last verified Phase 05 review: `P05-REV`
 - Requirement blockers: `none recorded`
 - UI reference pack: `INSTALLED - 8 screens + briefs + UI spec`
 - Decision gate: `CLOSED - ADR-005 through ADR-010 and ADR-016 accepted`

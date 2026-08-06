@@ -85,13 +85,17 @@ const createLoadedFacade = (repository: ExamSessionRepository): ExamSessionFacad
 
 describe('ExamSessionComponent and ExamSessionFacade', () => {
   const routeParam = vi.fn(() => 'session-token');
+  type CreateOptions = { keepFacadeAlive?: boolean };
+  let testBedInstantiated = false;
 
   beforeEach(() => {
+    testBedInstantiated = false;
     routeParam.mockReset();
     routeParam.mockReturnValue('session-token');
     TestBed.configureTestingModule({
       imports: [ExamSessionComponent],
       providers: [
+        { provide: EXAM_SESSION_QUESTION_SOURCE, useValue: questionSource },
         { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: routeParam } } } }
       ]
     });
@@ -99,17 +103,24 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
 
   const create = async (
     source: ExamSessionQuestionSource = questionSource,
-    keepFacadeAlive = false
+    options: CreateOptions = {}
   ) => {
-    TestBed.overrideProvider(EXAM_SESSION_QUESTION_SOURCE, { useValue: source });
-    const fixture = TestBed.createComponent(ExamSessionComponent);
-    fixture.detectChanges();
-    if (!keepFacadeAlive) {
-      fixture.componentInstance.facade.ngOnDestroy();
+    if (!testBedInstantiated && source !== questionSource) {
+      TestBed.overrideProvider(EXAM_SESSION_QUESTION_SOURCE, { useValue: source });
     }
+    const fixture = TestBed.createComponent(ExamSessionComponent);
+    testBedInstantiated = true;
+    fixture.detectChanges();
+    if (options.keepFacadeAlive) return fixture;
+    fixture.componentInstance.facade.ngOnDestroy();
     await fixture.whenRenderingDone();
     fixture.detectChanges();
     return fixture;
+  };
+
+  const flushRender = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
   };
 
   it('renders active workspace hierarchy without correctness or solution leakage', async () => {
@@ -152,7 +163,7 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
     const retrySource: ExamSessionQuestionSource = (session) => shouldFail
       ? throwError(() => new Error('Service unavailable'))
       : questionSource(session);
-    const fixture = await create(retrySource, true);
+    const fixture = await create(retrySource, { keepFacadeAlive: true });
     const facade = fixture.componentInstance.facade;
     try {
       expect(fixture.nativeElement.textContent).toContain('Unable to open exam session');
@@ -168,7 +179,7 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
       expect(facade.questions()).toHaveLength(3);
       expect(fixture.nativeElement.querySelector('.question-card')).not.toBeNull();
     } finally {
-      facade.ngOnDestroy();
+      fixture.destroy();
     }
   });
 
@@ -351,87 +362,220 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
 
 
   it('moves focus to the new question heading after direct, previous, and next navigation', async () => {
-    const fixture = await create();
-    const component = fixture.componentInstance;
-    component.selectQuestion(1);
-    fixture.detectChanges();
-    await fixture.whenRenderingDone();
-    fixture.detectChanges();
-    expect(document.activeElement?.id).toBe('current-question-heading');
-    component.goPrevious();
-    fixture.detectChanges();
-    await fixture.whenRenderingDone();
-    expect(document.activeElement?.id).toBe('current-question-heading');
+    const fixture = await create(questionSource);
+    try {
+      const component = fixture.componentInstance;
+      component.selectQuestion(1);
+      fixture.detectChanges();
+      await flushRender();
+      fixture.detectChanges();
+      expect(document.activeElement?.id).toBe('current-question-heading');
+      component.goPrevious();
+      fixture.detectChanges();
+      await flushRender();
+      fixture.detectChanges();
+      expect(document.activeElement?.id).toBe('current-question-heading');
+    } finally {
+      fixture.destroy();
+    }
   });
 
   it('warns from the synchronized timer, expires on a large monotonic jump, and rejects a late answer', () => {
     let monotonicNow = 10;
     const facade = createSessionFacade(() => monotonicNow);
-    facade.load('test-token').subscribe();
-    expect(facade.refreshTimer(59_000)?.warning).toBe(true);
-    monotonicNow = 60_010;
-    expect(facade.refreshTimer()?.expired).toBe(true);
-    expect(facade.updateAnswer('question-b', 'too late')).toBe(false);
-    expect(facade.draftFor('question-b')?.value).toBe(null);
+    try {
+      facade.load('test-token').subscribe();
+      expect(facade.refreshTimer(59_000)?.warning).toBe(true);
+      monotonicNow = 60_010;
+      expect(facade.refreshTimer()?.expired).toBe(true);
+      expect(facade.updateAnswer('question-b', 'too late')).toBe(false);
+      expect(facade.draftFor('question-b')?.value).toBe(null);
+    } finally {
+      facade.ngOnDestroy();
+    }
   });
 
   it('rejects an exact-deadline answer without mutating the draft', () => {
     const facade = createSessionFacade();
-    facade.load('test-token').subscribe();
-    facade.refreshTimer(60_010);
-    const before = facade.drafts();
-    expect(facade.updateAnswer('question-a', 'a')).toBe(false);
-    expect(facade.drafts()).toBe(before);
+    try {
+      facade.load('test-token').subscribe();
+      facade.refreshTimer(60_010);
+      const before = facade.drafts();
+      expect(facade.updateAnswer('question-a', 'a')).toBe(false);
+      expect(facade.drafts()).toBe(before);
+    } finally {
+      facade.ngOnDestroy();
+    }
   });
 
   it('disables answer, flag, and finish actions after submitted or terminal transition', () => {
     const facade = createSessionFacade();
-    facade.load('test-token').subscribe();
-    facade.transition('submitted').subscribe();
-    expect(facade.isTerminal()).toBe(true);
-    expect(facade.updateAnswer('question-a', 'a')).toBe(false);
-    expect(facade.toggleReview('question-a')).toBe(false);
-    expect(facade.canSubmit()).toBe(false);
-    expect(facade.submit(true).subscribe).toBeTypeOf('function');
+    try {
+      facade.load('test-token').subscribe();
+      facade.transition('submitted').subscribe();
+      expect(facade.isTerminal()).toBe(true);
+      expect(facade.updateAnswer('question-a', 'a')).toBe(false);
+      expect(facade.toggleReview('question-a')).toBe(false);
+      expect(facade.canSubmit()).toBe(false);
+      expect(facade.submit(true).subscribe).toBeTypeOf('function');
+    } finally {
+      facade.ngOnDestroy();
+    }
+  });
+  it('rejects submission while answers are queued or actively replaying', async () => {
+    vi.useFakeTimers();
+    const repository = createControlledRepository();
+    const storage = new InMemoryStorageAdapter<unknown>();
+    let operation = 0;
+    const queue = new OfflineAnswerQueue(storage as StorageAdapter<never>, () => `pending-${++operation}`);
+    const eventBus = new PlatformEventBus();
+    const platform = new PlatformState(eventBus);
+    const facade = new ExamSessionFacade(repository, questionSource, () => 10, queue, platform, eventBus);
+    try {
+      facade.load('test-token').subscribe({ error: (error) => { throw error; } });
+      platform.setConnectivity('offline');
+      facade.updateAnswer('question-a', 'queued answer');
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(facade.queuedAnswerCount()).toBe(1);
+      expect(facade.canSubmit()).toBe(false);
+      let queuedError: unknown;
+      facade.submit(true).subscribe({ error: (error) => { queuedError = error; } });
+      expect(queuedError).toMatchObject({ code: 'pending-sync' });
+      expect(facade.session()?.state).toBe('active');
+
+      repository.setMockScenario({ latencyMs: 20 });
+      platform.setConnectivity('reconnecting');
+      expect(facade.isReplaying()).toBe(true);
+      expect(facade.canSubmit()).toBe(false);
+      let replayError: unknown;
+      facade.submit(true).subscribe({ error: (error) => { replayError = error; } });
+      expect(replayError).toMatchObject({ code: 'pending-sync' });
+      expect(facade.session()?.state).toBe('active');
+    } finally {
+      facade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
-  it('requires explicit finish confirmation and supports cancel, Escape, and confirm', async () => {
+  it('owns a fresh live facade for route re-entry and keeps autosave active', async () => {
+    vi.useFakeTimers();
+    let firstFixture: ComponentFixture<ExamSessionComponent> | undefined;
+    let secondFixture: ComponentFixture<ExamSessionComponent> | undefined;
+    try {
+      firstFixture = await create(questionSource, { keepFacadeAlive: true });
+      const firstFacade = firstFixture.componentInstance.facade;
+      expect(firstFacade.session()?.state).toBe('active');
+      firstFixture.destroy();
+      firstFixture = undefined;
+
+      secondFixture = await create(questionSource, { keepFacadeAlive: true });
+      const secondFacade = secondFixture.componentInstance.facade;
+      expect(secondFacade).not.toBe(firstFacade);
+      expect(secondFacade.session()?.state).toBe('active');
+      expect(secondFacade.updateAnswer('question-a', 're-entry answer')).toBe(true);
+      await vi.advanceTimersByTimeAsync(320);
+      expect(secondFacade.autosaveState().status).toBe('saved');
+    } finally {
+      firstFixture?.destroy();
+      secondFixture?.destroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders the desktop workspace as a three-column CSS grid', async () => {
     const fixture = await create();
-    const component = fixture.componentInstance;
-    const trigger = fixture.nativeElement.querySelector('.finish-button') as HTMLButtonElement;
-    component.openFinishConfirmation();
-    fixture.detectChanges();
-    await fixture.whenRenderingDone();
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    expect(dialog).not.toBeNull();
-    expect(document.activeElement).toBe(dialog);
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    fixture.detectChanges();
-    await fixture.whenRenderingDone();
-    expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.activeElement).toBe(trigger);
-    component.openFinishConfirmation();
-    fixture.detectChanges();
-    (fixture.nativeElement.querySelector('.dialog-actions .secondary-action') as HTMLButtonElement).click();
-    fixture.detectChanges();
-    expect(component.finishConfirmationOpen()).toBe(false);
-    component.openFinishConfirmation();
-    fixture.detectChanges();
-    (fixture.nativeElement.querySelector('.dialog-actions .primary-action') as HTMLButtonElement).click();
-    fixture.detectChanges();
-    await fixture.whenRenderingDone();
-    expect(component.finishConfirmationOpen()).toBe(false);
-    expect(component.facade.session()?.state).toBe('submitted');
+    try {
+      const grid = fixture.nativeElement.querySelector('.workspace-grid') as HTMLElement;
+      const styles = getComputedStyle(grid);
+      const columns = styles.gridTemplateColumns.trim().match(/(?:minmax\([^)]*\)|[^\s]+)/g) ?? [];
+      expect(styles.display).toBe('grid');
+      expect(columns).toHaveLength(3);
+    } finally {
+      fixture.destroy();
+    }
+  });
+
+  it('keeps finish confirmation open with an alert and retry after submit failure', async () => {
+    const fixture = await create(questionSource, { keepFacadeAlive: true });
+    try {
+      const component = fixture.componentInstance;
+      const submit = vi.spyOn(component.facade, 'submit')
+        .mockReturnValue(throwError(() => new Error('Submission service unavailable')));
+      component.openFinishConfirmation();
+      fixture.detectChanges();
+      component.confirmFinish();
+      fixture.detectChanges();
+
+      const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
+      const alert = dialog.querySelector('.finish-submission-error') as HTMLElement;
+      const retry = dialog.querySelector('button[aria-label="Retry submission"]') as HTMLButtonElement;
+      expect(component.finishConfirmationOpen()).toBe(true);
+      expect(component.finishSubmissionLocked()).toBe(false);
+      expect(alert.getAttribute('role')).toBe('alert');
+      expect(alert.textContent).toContain('Submission service unavailable');
+      expect(retry).not.toBeNull();
+      expect(retry.disabled).toBe(false);
+
+      submit.mockReturnValue(of(component.facade.session()!));
+      retry.click();
+      fixture.detectChanges();
+      await flushRender();
+      expect(component.finishConfirmationOpen()).toBe(false);
+    } finally {
+      fixture.destroy();
+    }
+  });
+
+
+  it('requires explicit finish confirmation and supports cancel, Escape, and confirm', async () => {
+    const fixture = await create(questionSource);
+    try {
+      const component = fixture.componentInstance;
+      const trigger = fixture.nativeElement.querySelector('.finish-button') as HTMLButtonElement;
+      component.openFinishConfirmation();
+      fixture.detectChanges();
+      await flushRender();
+      const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
+      expect(dialog).not.toBeNull();
+      expect(document.activeElement).toBe(dialog);
+      dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      fixture.detectChanges();
+      await flushRender();
+      expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+      component.openFinishConfirmation();
+      fixture.detectChanges();
+      (fixture.nativeElement.querySelector('.dialog-actions .secondary-action') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(component.finishConfirmationOpen()).toBe(false);
+      component.openFinishConfirmation();
+      fixture.detectChanges();
+      (fixture.nativeElement.querySelector('.dialog-actions .primary-action') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      await flushRender();
+      expect(component.finishConfirmationOpen()).toBe(false);
+      expect(component.facade.session()?.state).toBe('submitted');
+    } finally {
+      fixture.destroy();
+    }
   });
 
   it('renders an autosave error live indicator, exposes Retry, and reports Saved after recovery', async () => {
     vi.useFakeTimers();
     let fixture: ComponentFixture<ExamSessionComponent> | undefined;
+    let injectedFacade: ExamSessionFacade | undefined;
     const repository = createControlledRepository();
     routeParam.mockReturnValue('test-token');
     try {
       const facade = new ExamSessionFacade(repository, questionSource, () => 10);
-      TestBed.overrideProvider(ExamSessionFacade, { useValue: facade });
+      injectedFacade = facade;
+      TestBed.overrideComponent(ExamSessionComponent, {
+        set: { providers: [{ provide: ExamSessionFacade, useValue: facade }] }
+      });
       fixture = TestBed.createComponent(ExamSessionComponent);
       fixture.detectChanges();
 
@@ -463,6 +607,7 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
       expect(indicator.textContent).toContain('Saved');
     } finally {
       fixture?.destroy();
+      injectedFacade?.ngOnDestroy();
       vi.clearAllTimers();
       vi.useRealTimers();
     }
@@ -531,7 +676,9 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
       await vi.advanceTimersByTimeAsync(20);
       await vi.advanceTimersByTimeAsync(20);
       routeParam.mockReturnValue('');
-      TestBed.overrideProvider(ExamSessionFacade, { useValue: secondFacade });
+      TestBed.overrideComponent(ExamSessionComponent, {
+        set: { providers: [{ provide: ExamSessionFacade, useValue: secondFacade }] }
+      });
       fixture = TestBed.createComponent(ExamSessionComponent);
       fixture.detectChanges();
       const region = fixture.nativeElement.querySelector('.draft-conflict') as HTMLElement;
