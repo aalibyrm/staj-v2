@@ -35,6 +35,10 @@ const loadExamSession = () =>
   import('../exam-session/components/exam-session.component').then(
     ({ ExamSessionComponent }) => ExamSessionComponent
   );
+const loadRubricGrader = () =>
+  import('../grading/components/rubric-grader.component').then(
+    ({ RubricGraderComponent }) => RubricGraderComponent
+  );
 
 
 const loadRoutePlaceholder = () =>
@@ -178,9 +182,16 @@ export const adaptiveLearningRoutes: Routes = [
     loadComponent: loadExamSession
   },
   placeholderRoute('grading', 'Grading', [ROUTE_CAPABILITIES.instructorTeaching]),
-  placeholderRoute('grading/:attemptId', 'Grading attempt', [
-    ROUTE_CAPABILITIES.instructorTeaching
-  ]),
+  {
+    path: 'grading/:attemptId',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Grading attempt',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [ROUTE_CAPABILITIES.instructorTeaching]
+    },
+    loadComponent: loadRubricGrader
+  },
   placeholderRoute('student/:id/analytics', 'Student analytics', [
     ROUTE_CAPABILITIES.studentLearning,
     ROUTE_CAPABILITIES.instructorTeaching,

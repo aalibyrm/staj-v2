@@ -19,6 +19,7 @@ import { CourseContentCatalogComponent } from '../../features/learning-domain/co
 import { QuestionBankComponent } from '../../features/question-bank/components/question-bank.component';
 import { adaptiveLearningRoutes } from '../../features/adaptive-learning/adaptive-learning.routes';
 import { ExamBuilderComponent } from '../../features/exam-builder/components/exam-builder.component';
+import { RubricGraderComponent } from '../../features/grading/components/rubric-grader.component';
 
 
 @Component({
@@ -47,7 +48,7 @@ const concreteRoutes: ReadonlyArray<readonly [string, string, RoleCode]> = [
   ['/exams', 'Exams', 'PROGRAM_MANAGER'],
   ['/exam-session/session-token', 'Exam session', 'STUDENT'],
   ['/grading', 'Grading', 'INSTRUCTOR'],
-  ['/grading/attempt-12', 'Grading attempt', 'INSTRUCTOR'],
+  ['/grading/attempt-12', 'Rubric grading', 'INSTRUCTOR'],
   ['/student/student-9/analytics', 'Student analytics', 'STUDENT'],
   ['/cohort-analytics', 'Cohort analytics', 'INSTRUCTOR'],
   ['/item-analysis', 'Item analysis', 'INSTRUCTOR'],
@@ -149,7 +150,7 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"], main[aria-labelledby="exam-builder-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"], main[aria-labelledby="exam-builder-heading"], main[aria-labelledby="rubric-grader-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
@@ -263,6 +264,16 @@ describe('application routes', () => {
       ROUTE_CAPABILITIES.platformAdministration
     ]);
     expect(await mapRoute?.loadComponent?.()).toBe(OutcomeGraphComponent);
+  });
+  it('lazy-loads the guarded rubric grader and preserves grading list placeholder and capability', async () => {
+    const gradingRoute = adaptiveLearningRoutes.find((route) => route.path === 'grading');
+    const attemptRoute = adaptiveLearningRoutes.find((route) => route.path === 'grading/:attemptId');
+    expect(gradingRoute?.loadComponent).not.toBeUndefined();
+    expect(await gradingRoute?.loadComponent?.()).toBe(RoutePlaceholderComponent);
+    expect(attemptRoute?.pathMatch).toBe('full');
+    expect(attemptRoute?.canMatch).toContain(authGuard);
+    expect(attemptRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([ROUTE_CAPABILITIES.instructorTeaching]);
+    expect(await attemptRoute?.loadComponent?.()).toBe(RubricGraderComponent);
   });
   it('lazy-loads the courses catalog and preserves the guarded course path placeholder', async () => {
     const coursesRoute = adaptiveLearningRoutes.find((route) => route.path === 'courses');
