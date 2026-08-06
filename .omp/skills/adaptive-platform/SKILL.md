@@ -7,9 +7,9 @@ Use project harness, not a one-shot build.
 
 1. Read `docs/project/STATE.md`, `HANDOFF.md`, then active phase.
 2. Resolve only referenced requirement IDs from `docs/requirements/`.
-3. Sol creates one bounded work packet and delegates application edits to `adaptive-builder`.
+3. The Opus orchestrator creates one bounded work packet and delegates application edits to `adaptive-builder`.
 4. If packet has `ui-key`, read `skill://adaptive-ui`; assign one brief and one reference image.
-5. Sol inspects diff and runs functional/UI gates. One focused repair maximum before replanning.
+5. The orchestrator inspects the diff and runs functional/UI gates using the bounded recovery policy in `adaptive-next`.
 6. Update traceability/state only after evidence passes; then commit/push through `adaptive-committer`.
 
 Never collapse layers: components -> facade/use-case -> repository/mock transport. Keep Signals for state/derived values, RxJS for async flows, Reactive Forms for forms. Preserve role/data scope, versioning, autosave conflict, reference-time timer, audit, privacy threshold, and explainable recommendation rules.
