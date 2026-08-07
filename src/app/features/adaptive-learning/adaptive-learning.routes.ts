@@ -39,6 +39,10 @@ const loadRubricGrader = () =>
   import('../grading/components/rubric-grader.component').then(
     ({ RubricGraderComponent }) => RubricGraderComponent
   );
+const loadAuditLog = () =>
+  import('../audit/components/audit-log.component').then(
+    ({ AuditLogComponent }) => AuditLogComponent
+  );
 
 
 const loadRoutePlaceholder = () =>
@@ -207,10 +211,19 @@ export const adaptiveLearningRoutes: Routes = [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace
   ]),
-  placeholderRoute('audit-log', 'Audit log', [
-    ROUTE_CAPABILITIES.measurementWorkspace,
-    ROUTE_CAPABILITIES.programWorkspace,
-    ROUTE_CAPABILITIES.observerReports,
-    ROUTE_CAPABILITIES.platformAdministration
-  ]),
+  {
+    path: 'audit-log',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Audit log',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.measurementWorkspace,
+        ROUTE_CAPABILITIES.programWorkspace,
+        ROUTE_CAPABILITIES.observerReports,
+        ROUTE_CAPABILITIES.platformAdministration
+      ]
+    },
+    loadComponent: loadAuditLog
+  },
 ];
