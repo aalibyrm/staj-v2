@@ -1,7 +1,7 @@
 # Screen Brief: Audit Log
 
 - `ui-key`: `audit-log`
-- Route: `/audit`
+- Route: `/audit-log` (repository-canonical path registered in `core/auth/authorization.ts`; the original `/audit` draft was never implemented)
 - Primary roles: administrator and explicitly permitted auditor roles
 - Reference: `docs/ui/reference/08-audit-log.webp`
 - Primary phase: 06

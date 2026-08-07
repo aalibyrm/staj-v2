@@ -100,6 +100,9 @@ const scoreChangeStateForError = (error: unknown): RubricScoreChangeState => {
   return Object.freeze({ status: 'error' as const, message: normalized.userMessage, retryable: normalized.retryable });
 };
 
+/** Trims and collapses internal whitespace runs to a single space, matching the model's normalization. */
+const normalizeScoreChangeReason = (value: string): string => value.trim().replace(/\s+/gu, ' ');
+
 @Injectable({ providedIn: 'root' })
 export class RubricGradingFacade {
   private readonly repository: RubricGradingRepository;
@@ -248,19 +251,26 @@ export class RubricGradingFacade {
       return throwError(() => new RubricGradingFacadeError('not-ready', message));
     }
 
+    const normalizedReason = normalizeScoreChangeReason(input.reason);
+    if (normalizedReason.length === 0) {
+      const message = 'A reason is required to apply a score change.';
+      this.scoreChangeStateState.set(Object.freeze({ status: 'error', message, retryable: false }));
+      return throwError(() => new RubricGradingFacadeError('not-ready', message));
+    }
+
     const attemptId = grading.context.attemptId;
     const previousPoints = this.previousScoreChangeTotal();
     const priorHistory = this.scoreChangeHistoryState();
     const revision = ++this.requestRevision;
     this.pendingScoreChangeState.set(
-      Object.freeze({ previousPoints, nextPoints: input.nextPoints, reason: input.reason, actorId })
+      Object.freeze({ previousPoints, nextPoints: input.nextPoints, reason: normalizedReason, actorId })
     );
     this.scoreChangeStateState.set(Object.freeze({ status: 'saving' }));
     this.lastNotificationState.set(null);
 
     return defer(() => this.repository.submitScoreChange(
       attemptId,
-      { reason: input.reason, nextPoints: input.nextPoints, previousPoints },
+      { reason: normalizedReason, nextPoints: input.nextPoints, previousPoints },
       { actorId }
     )).pipe(
       map((entry) => {

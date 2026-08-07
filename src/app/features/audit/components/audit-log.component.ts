@@ -5,7 +5,7 @@ import { catchError, EMPTY } from 'rxjs';
 import { ListQueryControlsComponent, type ListFilterOption, type ListSortOption } from '../../../shared/components/list-query-controls.component';
 import { ListQueryStateFacade } from '../../../shared/state/list-query-state';
 import { RequestStateComponent, type RequestStateKind } from '../../../shared/components/request-state.component';
-import { AUDIT_CATEGORIES, AUDIT_STATUSES } from '../models/audit-log.models';
+import { AUDIT_CATEGORIES, AUDIT_STATUSES, type AuditLogRecord } from '../models/audit-log.models';
 import { AuditLogFacade } from '../data-access/audit-log.facade';
 import { AuditRecordDetailComponent } from './audit-record-detail.component';
 import type { AuditLogQuery } from '../domain/audit-log-query';
@@ -14,6 +14,21 @@ const PAGE_SIZE_CHOICES: readonly number[] = Object.freeze([10, 20, 50]);
 const DEFAULT_PAGE_SIZE = 20;
 
 const humanizeToken = (token: string): string => token.replace(/-/gu, ' ').replace(/\b\w/gu, (c) => c.toUpperCase());
+
+const MAX_DATE_FILTER_DAYS = 7;
+
+const formatDayLabel = (day: string): string =>
+  new Date(`${day}T00:00:00.000Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+/** One `from:`/`to:` filter option per distinct record day, newest first, capped to the most recent `MAX_DATE_FILTER_DAYS` days. */
+const buildDateFilterOptions = (records: readonly AuditLogRecord[]): ListFilterOption[] => {
+  const days = Array.from(new Set(records.map((record) => record.occurredAt.slice(0, 10))))
+    .sort((left, right) => right.localeCompare(left))
+    .slice(0, MAX_DATE_FILTER_DAYS);
+  const fromOptions = days.map((day) => ({ value: `from:${day}`, label: `From ${formatDayLabel(day)}` }));
+  const toOptions = days.map((day) => ({ value: `to:${day}`, label: `To ${formatDayLabel(day)}` }));
+  return [...fromOptions, ...toOptions];
+};
 
 const REQUEST_STATE_MAP: Readonly<Record<string, RequestStateKind>> = Object.freeze({
   loading: 'loading',
@@ -139,7 +154,8 @@ export class AuditLogComponent {
     const statusOptions = AUDIT_STATUSES.map((status) => ({ value: `status:${status}`, label: `Status: ${humanizeToken(status)}` }));
     const actorLabelById = new Map(records.map((record) => [record.actorId, record.actorLabel]));
     const actorOptions = Array.from(actorLabelById, ([actorId, label]) => ({ value: `actor:${actorId}`, label: `Actor: ${label}` }));
-    return [...categoryOptions, ...statusOptions, ...actorOptions];
+    const dateOptions = buildDateFilterOptions(records);
+    return [...categoryOptions, ...statusOptions, ...actorOptions, ...dateOptions];
   });
 
   readonly sortOptions: readonly ListSortOption[] = Object.freeze([

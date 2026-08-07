@@ -38,6 +38,8 @@ export type ParsedAuditFilters = Readonly<{
   readonly categories: readonly AuditCategory[];
   readonly statuses: readonly AuditStatus[];
   readonly actors: readonly string[];
+  readonly from: string | null;
+  readonly to: string | null;
 }>;
 
 const CATEGORY_LOOKUP: Readonly<Record<string, true>> = Object.freeze(
@@ -47,10 +49,21 @@ const STATUS_LOOKUP: Readonly<Record<string, true>> = Object.freeze(
   Object.fromEntries(AUDIT_STATUSES.map((status): [string, true] => [status, true]))
 );
 
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Normalizes a `from:`/`to:` filter value to an ISO instant. A bare date is widened to the start (`from`) or end (`to`) of that UTC day; an unparseable value returns `null`. */
+const parseDateBound = (value: string, edge: 'start' | 'end'): string | null => {
+  const iso = DATE_ONLY_PATTERN.test(value) ? `${value}T${edge === 'start' ? '00:00:00.000' : '23:59:59.999'}Z` : value;
+  const parsed = Date.parse(iso);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+};
+
 /**
- * Parses `category:<value>`, `status:<value>`, and `actor:<accountId>`
- * tokens. Unknown prefixes and unrecognized enum values are silently
- * ignored — this function never throws.
+ * Parses `category:<value>`, `status:<value>`, `actor:<accountId>`,
+ * `from:<date>`, and `to:<date>` tokens. Unknown prefixes and unrecognized
+ * enum values are silently ignored — this function never throws. A `from`/
+ * `to` value that `Date.parse` cannot read is likewise ignored; when the
+ * same prefix appears more than once, the first valid value wins.
  */
 export const parseAuditFilters = (filters: readonly string[]): ParsedAuditFilters => {
   const categories: AuditCategory[] = [];
@@ -59,6 +72,8 @@ export const parseAuditFilters = (filters: readonly string[]): ParsedAuditFilter
   const seenCategories = new Set<string>();
   const seenStatuses = new Set<string>();
   const seenActors = new Set<string>();
+  let from: string | null = null;
+  let to: string | null = null;
 
   for (const raw of filters) {
     if (typeof raw !== 'string') continue;
@@ -77,13 +92,19 @@ export const parseAuditFilters = (filters: readonly string[]): ParsedAuditFilter
     } else if (prefix === 'actor' && !seenActors.has(value)) {
       seenActors.add(value);
       actors.push(value);
+    } else if (prefix === 'from' && from === null) {
+      from = parseDateBound(value, 'start');
+    } else if (prefix === 'to' && to === null) {
+      to = parseDateBound(value, 'end');
     }
   }
 
   return Object.freeze({
     categories: Object.freeze(categories),
     statuses: Object.freeze(statuses),
-    actors: Object.freeze(actors)
+    actors: Object.freeze(actors),
+    from,
+    to
   });
 };
 
@@ -125,7 +146,7 @@ const sortComparator = (sort: string): ((left: AuditLogRecord, right: AuditLogRe
  * an empty result always yields `pageCount: 1` and an empty items array.
  */
 export const selectAuditPage = (records: readonly AuditLogRecord[], query: AuditLogQuery): AuditLogPage => {
-  const { categories, statuses, actors } = parseAuditFilters(query.filters);
+  const { categories, statuses, actors, from, to } = parseAuditFilters(query.filters);
   const categorySet = new Set(categories);
   const statusSet = new Set(statuses);
   const actorSet = new Set(actors);
@@ -135,6 +156,8 @@ export const selectAuditPage = (records: readonly AuditLogRecord[], query: Audit
     if (categorySet.size > 0 && !categorySet.has(record.category)) return false;
     if (statusSet.size > 0 && !statusSet.has(record.status)) return false;
     if (actorSet.size > 0 && !actorSet.has(record.actorId)) return false;
+    if (from !== null && record.occurredAt < from) return false;
+    if (to !== null && record.occurredAt > to) return false;
     if (search.length === 0) return true;
     return (
       record.action.toLowerCase().includes(search) ||

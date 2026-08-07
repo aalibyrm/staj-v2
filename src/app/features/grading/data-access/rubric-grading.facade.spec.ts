@@ -292,6 +292,43 @@ describe('RubricGradingFacade score changes', () => {
     expect(facade.scoreChangeHistory()).toHaveLength(1);
     expect(facade.scoreChangeHistory()[0].nextPoints).toBe(95);
   });
+
+  it('rejects a blank or whitespace-only reason without touching pending state or calling the repository', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const submitSpy = repository.submitScoreChange.bind(repository);
+    let called = false;
+    repository.submitScoreChange = ((...args: Parameters<typeof submitSpy>) => {
+      called = true;
+      return submitSpy(...args);
+    }) as typeof submitSpy;
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-blank-reason'));
+
+    await expect(firstValueFrom(facade.submitScoreChange({ reason: '   ', nextPoints: 90 }))).rejects.toBeTruthy();
+    expect(called).toBe(false);
+    expect(facade.pendingScoreChange()).toBeNull();
+    expect(facade.scoreChangeState().status).toBe('error');
+  });
+
+  it('normalizes a padded, internally spaced reason before recording the pending change and calling the repository', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const submitSpy = repository.submitScoreChange.bind(repository);
+    let capturedReason: string | undefined;
+    repository.submitScoreChange = ((...args: Parameters<typeof submitSpy>) => {
+      capturedReason = args[1].reason;
+      return submitSpy(...args);
+    }) as typeof submitSpy;
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-padded-reason'));
+
+    const submission = facade.submitScoreChange({ reason: '  Second   reader  ', nextPoints: 90 });
+    expect(facade.pendingScoreChange()?.reason).toBe('Second reader');
+
+    await firstValueFrom(submission);
+    expect(capturedReason).toBe('Second reader');
+  });
 });
 
 class RecordingNotificationPort extends NotificationPort {

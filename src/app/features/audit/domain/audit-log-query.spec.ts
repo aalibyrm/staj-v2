@@ -64,6 +64,21 @@ describe('parseAuditFilters', () => {
   it('never throws on garbage input', () => {
     expect(() => parseAuditFilters(['', ':', 'category:', 'status:success:extra'])).not.toThrow();
   });
+
+  it('parses from:/to: date-only tokens into start-of-day and end-of-day ISO instants, and ignores an unparseable value', () => {
+    const parsed = parseAuditFilters(['from:2025-05-04', 'to:2025-05-04']);
+    expect(parsed.from).toBe('2025-05-04T00:00:00.000Z');
+    expect(parsed.to).toBe('2025-05-04T23:59:59.999Z');
+
+    const unparseable = parseAuditFilters(['from:not-a-date', 'to:also-not-a-date']);
+    expect(unparseable.from).toBeNull();
+    expect(unparseable.to).toBeNull();
+  });
+
+  it('keeps the first valid from: value when the prefix repeats', () => {
+    const parsed = parseAuditFilters(['from:not-a-date', 'from:2025-05-04', 'from:2025-05-06']);
+    expect(parsed.from).toBe('2025-05-04T00:00:00.000Z');
+  });
 });
 
 describe('selectAuditPage', () => {
@@ -124,6 +139,48 @@ describe('selectAuditPage', () => {
     expect(page.total).toBe(0);
     expect(page.pageCount).toBe(1);
     expect(page.page).toBe(1);
+  });
+
+  it('includes a record occurring at 00:00 of a bare from: date and excludes the day before', () => {
+    const atMidnight = record({ occurredAt: '2025-05-04T00:00:00.000Z' });
+    const dayBefore = record({ occurredAt: '2025-05-03T23:59:59.999Z' });
+    const page = selectAuditPage([dayBefore, atMidnight], { ...baseQuery, filters: ['from:2025-05-04'] });
+    expect(page.items).toEqual([atMidnight]);
+  });
+
+  it('includes a record occurring late in the day for a bare to: date and excludes the day after', () => {
+    const lateSameDay = record({ occurredAt: '2025-05-04T23:59:59.999Z' });
+    const nextDay = record({ occurredAt: '2025-05-05T00:00:00.000Z' });
+    const page = selectAuditPage([lateSameDay, nextDay], { ...baseQuery, filters: ['to:2025-05-04'] });
+    expect(page.items).toEqual([lateSameDay]);
+  });
+
+  it('returns only records within a from:/to: range', () => {
+    const before = record({ occurredAt: '2025-05-02T12:00:00.000Z' });
+    const inRange = record({ occurredAt: '2025-05-04T12:00:00.000Z' });
+    const after = record({ occurredAt: '2025-05-07T12:00:00.000Z' });
+    const page = selectAuditPage([before, inRange, after], {
+      ...baseQuery,
+      filters: ['from:2025-05-03', 'to:2025-05-05']
+    });
+    expect(page.items).toEqual([inRange]);
+  });
+
+  it('ignores an unparseable from: token and returns the unfiltered set', () => {
+    const records = [record(), record(), record()];
+    const page = selectAuditPage(records, { ...baseQuery, filters: ['from:not-a-date'] });
+    expect(page.total).toBe(records.length);
+  });
+
+  it('combines a date facet with a category facet as AND', () => {
+    const matching = record({ category: 'score-change', occurredAt: '2025-05-04T12:00:00.000Z' });
+    const wrongCategory = record({ category: 'override', occurredAt: '2025-05-04T12:00:00.000Z' });
+    const wrongDate = record({ category: 'score-change', occurredAt: '2025-05-09T12:00:00.000Z' });
+    const page = selectAuditPage([matching, wrongCategory, wrongDate], {
+      ...baseQuery,
+      filters: ['from:2025-05-04', 'to:2025-05-04', 'category:score-change']
+    });
+    expect(page.items).toEqual([matching]);
   });
 });
 
