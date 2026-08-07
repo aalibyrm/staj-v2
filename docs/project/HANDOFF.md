@@ -1,6 +1,6 @@
 # Compact Handoff
 
-- Repository state: `origin -> https://github.com/aalibyrm/staj-v2.git`; branch `main` tracking `origin/main`; P06-W06 delivered in `a36c35d`; `P06-REV` exit review verified and pending its own commit/push. Phase 06 is COMPLETE.
+- Repository state: `origin -> https://github.com/aalibyrm/staj-v2.git`; branch `main` clean and tracking `origin/main`; P06-W06 delivered in `a36c35d`; `P06-REV` delivered in `09feccb` (11 paths). Phase 06 is COMPLETE.
 - Architecture: Phase 06 delivers objective + rubric scoring (pure selectors), grading workflow status, route/action/data-scope enforcement on `/grading/:attemptId`, mandatory-reason score changes with immutable history, optimistic apply with exact rollback and notification, and the append-only audit log at `/audit-log` wired as `AuditPort` in `app.config.ts`. P06-REV added a facade-level blank-reason guard before any optimistic write, the missing `from:`/`to:` date facet in `audit-log-query.ts`, and `audit-log.repository.spec.ts` covering the `record()` to `list()` seam.
 - UI direction: `/grading/:attemptId` now shows the persisted total beside the working total (so a rollback is visible on the score card), exam title and course in the context card, and a selected rubric level distinguished from hover by border and font weight, not colour alone. `/audit-log` keeps the P06-W06 layout and gains day-bounded date filter options derived from loaded records. Grader style block 7979 B, audit-log 3596 B, both under the 8192 B error budget.
 - Active phase: Phase 06 complete; Phase 07 not started

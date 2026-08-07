@@ -6,8 +6,8 @@
 - Last verified packet: `P06-REV`
 - Git remote: `origin -> https://github.com/aalibyrm/staj-v2.git`
 - Git branch: `main`
-- Git sync status: `P06-REV VERIFIED; awaiting adaptive-committer commit/push`
-- Last verified commit: `a36c35d - feat(audit): add filterable append-only audit log screen [P06-W06]`
+- Git sync status: `CLEAN - main tracking origin/main, no divergence`
+- Last verified commit: `09feccb - fix(grading,audit): clear phase 06 exit review findings [P06-REV]`
 - Last verified phase review: `P06-REV` (Phase 05 review `P05-REV` remains recorded)
 - Requirement blockers: `none`
 - UI reference pack: `INSTALLED - 8 screens + briefs + UI spec`
