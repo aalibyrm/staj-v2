@@ -11,6 +11,9 @@ import {
   RubricDomainError,
   type RubricGrading
 } from '../models/rubric.models';
+import { createScoreChangeEntry, type ScoreChangeEntry } from '../models/score-change.models';
+import { appendScoreChange, buildScoreChangeAuditDraft, deriveEvaluationCount } from '../domain/score-change-history';
+import { AuditPort, type AuditEventDraft } from '../../../core/observability/observability.ports';
 
 export type RubricGradingReadOptions = Readonly<Partial<MockScenarioControls> & {
   readonly empty?: boolean;
@@ -42,6 +45,9 @@ const normalizeAttemptId = (value: unknown): string => {
   }
   return value.trim();
 };
+
+const now = (): string => new Date().toISOString();
+const EMPTY_SCORE_CHANGE_HISTORY: readonly ScoreChangeEntry[] = Object.freeze([]);
 
 /** Demo instructor scope grant, duplicated per convention (see scoped-data.facade.spec.ts) to avoid importing core/auth from a data-access fixture. */
 const DEMO_SCOPED_STUDENT_IDS = Object.freeze([
@@ -136,10 +142,17 @@ const createNeutralFixture = (attemptId: string): RubricGrading => {
 @Injectable({ providedIn: 'root' })
 export class RubricGradingRepository {
   private readonly transport: MockTransport;
+  private readonly audit: AuditPort | null;
   private scenarioControls: MockScenarioControls = Object.freeze({ ...DEFAULT_MOCK_SCENARIO });
+  private readonly scoreChangeHistoryByAttempt = new Map<string, readonly ScoreChangeEntry[]>();
+  private readonly currentPointsByAttempt = new Map<string, number>();
 
-  constructor(@Optional() @Inject(MockTransport) transport: MockTransport | null = null) {
+  constructor(
+    @Optional() @Inject(MockTransport) transport: MockTransport | null = null,
+    @Optional() audit: AuditPort | null = null
+  ) {
     this.transport = transport ?? new MockTransport();
+    this.audit = audit;
   }
 
   getByAttemptId(attemptId: string, options: RubricGradingReadOptions = {}): Observable<RubricGrading | null> {
@@ -169,6 +182,55 @@ export class RubricGradingRepository {
     return this.getByAttemptId(attemptId, options);
   }
 
+  submitScoreChange(
+    attemptId: string,
+    input: Readonly<{ readonly reason: string; readonly nextPoints: number; readonly previousPoints: number }>,
+    options: Readonly<{ readonly actorId: string }> & RubricGradingReadOptions
+  ): Observable<ScoreChangeEntry> {
+    return defer(() => {
+      const normalizedAttemptId = normalizeAttemptId(attemptId);
+      const currentHistory = this.scoreChangeHistoryByAttempt.get(normalizedAttemptId) ?? EMPTY_SCORE_CHANGE_HISTORY;
+      const evaluationNumber = deriveEvaluationCount(currentHistory) + 1;
+      const entry = createScoreChangeEntry({
+        id: `${normalizedAttemptId}-change-${evaluationNumber}`,
+        attemptId: normalizedAttemptId,
+        previousPoints: input.previousPoints,
+        nextPoints: input.nextPoints,
+        reason: input.reason,
+        actorId: options.actorId,
+        occurredAt: now(),
+        evaluationNumber
+      });
+      const controls = { ...this.scenarioControls, ...options };
+      return this.transport.execute(
+        {
+          method: 'POST',
+          url: `/grading-attempts/${encodeURIComponent(normalizedAttemptId)}/score-changes`,
+          body: { reason: entry.reason, nextPoints: entry.nextPoints }
+        },
+        (): ScoreChangeEntry => {
+          const updatedHistory = appendScoreChange(currentHistory, entry);
+          this.scoreChangeHistoryByAttempt.set(normalizedAttemptId, updatedHistory);
+          this.currentPointsByAttempt.set(normalizedAttemptId, entry.nextPoints);
+          const context = createNeutralFixture(normalizedAttemptId).context;
+          this.recordAudit(buildScoreChangeAuditDraft(entry, {
+            attemptId: normalizedAttemptId,
+            studentId: context.studentId,
+            examId: context.examId
+          }));
+          return entry;
+        },
+        controls
+      ).pipe(map((response) => response.body));
+    });
+  }
+
+  listScoreChanges(attemptId: string): readonly ScoreChangeEntry[] {
+    const normalizedAttemptId = normalizeAttemptId(attemptId);
+    const existing = this.scoreChangeHistoryByAttempt.get(normalizedAttemptId);
+    return existing === undefined ? EMPTY_SCORE_CHANGE_HISTORY : Object.freeze([...existing]);
+  }
+
   setMockScenario(controls: Partial<MockScenarioControls>): void {
     if (controls === null || typeof controls !== 'object' || Array.isArray(controls)) {
       throw new TypeError('Mock scenario controls must be an object.');
@@ -186,6 +248,15 @@ export class RubricGradingRepository {
 
   fixtureForAttempt(attemptId: string): RubricGrading {
     return createNeutralFixture(normalizeAttemptId(attemptId));
+  }
+
+  private recordAudit(event: AuditEventDraft): void {
+    if (this.audit === null) return;
+    try {
+      void Promise.resolve(this.audit.record(event)).catch(() => undefined);
+    } catch {
+      return;
+    }
   }
 }
 

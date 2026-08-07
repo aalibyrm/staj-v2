@@ -7,11 +7,13 @@ import { RubricGradingRepository } from '../data-access/rubric-grading.repositor
 import type { GradingWorkflowState, GradingWorkflowStatus } from '../models/grading-workflow.models';
 import type { RubricGrading } from '../models/rubric.models';
 import { provideRouter } from '@angular/router';
+import { By } from '@angular/platform-browser';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RubricGraderComponent } from './rubric-grader.component';
+import { ScoreChangePanelComponent } from './score-change-panel.component';
 
 const instructorAccount = DEMO_ACCOUNTS.find((account) => account.roleCode === 'INSTRUCTOR')!;
 const studentAccount = DEMO_ACCOUNTS.find((account) => account.roleCode === 'STUDENT')!;
@@ -159,6 +161,11 @@ describe('RubricGraderComponent', () => {
       rubric,
       workflowState,
       workflowStatus,
+      isGradable: signal(false),
+      scoreChangeHistory: signal([]),
+      reEvaluationTimeline: signal([]),
+      scoreChangeState: signal({ status: 'idle' }),
+      previousScoreChangeTotal: signal(0),
       load,
       retry
     } as unknown as RubricGradingFacade;
@@ -257,6 +264,11 @@ describe('RubricGraderComponent', () => {
       rubric,
       workflowState,
       workflowStatus,
+      isGradable: signal(true),
+      scoreChangeHistory: signal([]),
+      reEvaluationTimeline: signal([]),
+      scoreChangeState: signal({ status: 'idle' }),
+      previousScoreChangeTotal: signal(0),
       load,
       retry
     } as unknown as RubricGradingFacade;
@@ -278,5 +290,71 @@ describe('RubricGraderComponent', () => {
     expect(workflowStatusEl?.getAttribute('data-workflow-status')).toBe('re-evaluated');
     expect(workflowStatusEl?.textContent).toContain('Re-evaluated');
     expect(workflowStatusEl?.textContent).toContain('3 / 3 criteria scored');
+  });
+
+  it('blocks the score change confirmation while the reason is blank, then applies it and renders the timeline', async () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [RubricGraderComponent],
+      providers: [
+        provideRouter([{ path: 'grading/:attemptId', component: RubricGraderComponent }]),
+        sessionStoreProvider(authorizedInstructorSession())
+      ]
+    });
+    const harness = await RouterTestingHarness.create();
+    const component = await harness.navigateByUrl('/grading/attempt-score-change', RubricGraderComponent);
+    await harness.fixture.whenStable();
+    await vi.waitFor(() => {
+      expect(component.facade.rubric()?.criteria.length).toBe(3);
+    });
+    component.facade.rubric()?.criteria.forEach((criterion, index) => {
+      component.criterionForm(index).controls.levelId.setValue(criterion.levels.at(-1)?.id ?? null);
+    });
+    harness.detectChanges();
+
+    const element = harness.routeNativeElement as HTMLElement;
+    expect(element.textContent).toContain('No score changes have been recorded');
+    const applyButton = element.querySelector<HTMLButtonElement>('.review-actions .secondary-action');
+    expect(applyButton?.disabled).toBe(false);
+    applyButton?.click();
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+
+    const panel = element.querySelector<HTMLElement>('.score-change-confirmation');
+    expect(panel?.getAttribute('role')).toBe('dialog');
+    expect(document.activeElement).toBe(panel);
+
+    const confirmButton = panel?.querySelector<HTMLButtonElement>('button[type="button"]:not(.secondary-action)');
+    expect(confirmButton?.disabled).toBe(true);
+    const scoreChangePanel = harness.fixture.debugElement.query(By.directive(ScoreChangePanelComponent)).componentInstance as ScoreChangePanelComponent;
+    scoreChangePanel.confirm();
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+    const alertMessage = panel?.querySelector<HTMLElement>('[role="alert"]');
+    expect(alertMessage?.textContent).toContain('Enter a nonblank reason');
+    const reasonTextarea = panel?.querySelector<HTMLTextAreaElement>('#score-change-reason');
+    expect(document.activeElement).toBe(reasonTextarea);
+    expect(element.querySelector('.score-change-confirmation')).not.toBeNull();
+
+    reasonTextarea!.value = 'Reconsidered the reasoning criterion after a second read.';
+    reasonTextarea!.dispatchEvent(new Event('input'));
+    harness.detectChanges();
+    expect(confirmButton?.disabled).toBe(false);
+    confirmButton?.click();
+    harness.detectChanges();
+    await vi.waitFor(() => {
+      expect(component.facade.scoreChangeState().status).toBe('saved');
+    });
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+
+    expect(element.querySelector('.score-change-confirmation')).toBeNull();
+    expect(component.liveStatus()).toContain('Score change applied');
+    expect(component.facade.scoreChangeHistory()).toHaveLength(1);
+    const timelineItem = element.querySelector<HTMLElement>('.reevaluation-item');
+    expect(timelineItem?.textContent).toContain('Reconsidered the reasoning criterion after a second read.');
+    expect(timelineItem?.textContent).toContain(instructorAccount.id);
+    expect(timelineItem?.textContent).toContain('Evaluation 2');
+    expect(document.activeElement).toBe(applyButton);
   });
 });

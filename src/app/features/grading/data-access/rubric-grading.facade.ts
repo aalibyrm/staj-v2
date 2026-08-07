@@ -17,6 +17,7 @@ import { normalizeApplicationError } from '../../../core/api/api-error';
 import { SessionStore } from '../../../core/auth/session.store';
 import { decideGradingAttemptAccess, type GradingAccessDecision } from '../domain/grading-access';
 import { deriveGradingWorkflowState } from '../domain/grading-workflow';
+import { deriveEvaluationCount, selectReEvaluationTimeline, type ReEvaluationTimelineItem } from '../domain/score-change-history';
 import {
   selectRubricScore,
   type RubricScoringResult
@@ -25,6 +26,7 @@ import {
   RubricGradingRepository,
   type RubricGradingReadOptions
 } from './rubric-grading.repository';
+import { ScoreChangeError, type ScoreChangeEntry } from '../models/score-change.models';
 import type {
   GradingContext,
   ResponsePreview,
@@ -41,6 +43,14 @@ export type RubricGradingRequestState = Readonly<{
   readonly retryable?: boolean;
 }>;
 
+export type RubricScoreChangeStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+export type RubricScoreChangeState = Readonly<{
+  readonly status: RubricScoreChangeStatus;
+  readonly message?: string;
+  readonly retryable?: boolean;
+}>;
+
 export class RubricGradingFacadeError extends Error {
   override readonly name = 'RubricGradingFacadeError';
 
@@ -53,6 +63,8 @@ export class RubricGradingFacadeError extends Error {
 }
 
 const EMPTY_LIST: readonly never[] = Object.freeze([]);
+const EMPTY_SCORE_CHANGES: readonly ScoreChangeEntry[] = Object.freeze([]);
+const IDLE_SCORE_CHANGE_STATE: RubricScoreChangeState = Object.freeze({ status: 'idle' });
 
 const stateForError = (error: unknown): RubricGradingRequestState => {
   const normalized = normalizeApplicationError(error);
@@ -70,12 +82,22 @@ const stateForError = (error: unknown): RubricGradingRequestState => {
   });
 };
 
+const scoreChangeStateForError = (error: unknown): RubricScoreChangeState => {
+  if (error instanceof ScoreChangeError) {
+    return Object.freeze({ status: 'error' as const, message: error.message, retryable: false });
+  }
+  const normalized = normalizeApplicationError(error);
+  return Object.freeze({ status: 'error' as const, message: normalized.userMessage, retryable: normalized.retryable });
+};
+
 @Injectable({ providedIn: 'root' })
 export class RubricGradingFacade {
   private readonly repository: RubricGradingRepository;
   private readonly sessionStore: SessionStore;
   private readonly requestStateState = signal<RubricGradingRequestState>({ status: 'idle' });
   private readonly gradingState = signal<RubricGrading | null>(null);
+  private readonly scoreChangeHistoryState = signal<readonly ScoreChangeEntry[]>(EMPTY_SCORE_CHANGES);
+  private readonly scoreChangeStateState = signal<RubricScoreChangeState>(IDLE_SCORE_CHANGE_STATE);
   private requestRevision = 0;
   private lastAttemptId: string | null = null;
   private lastReadOptions: RubricGradingReadOptions = Object.freeze({});
@@ -98,9 +120,21 @@ export class RubricGradingFacade {
   readonly accessDecision: Signal<GradingAccessDecision> = computed(() =>
     decideGradingAttemptAccess(this.sessionStore.session(), this.context())
   );
+  readonly scoreChangeHistory: Signal<readonly ScoreChangeEntry[]> = this.scoreChangeHistoryState.asReadonly();
+  readonly reEvaluationTimeline: Signal<readonly ReEvaluationTimelineItem[]> = computed(() =>
+    selectReEvaluationTimeline(this.scoreChangeHistoryState())
+  );
+  readonly scoreChangeState: Signal<RubricScoreChangeState> = this.scoreChangeStateState.asReadonly();
+  /** The total this attempt currently carries, before any new in-progress score change is applied. */
+  readonly previousScoreChangeTotal: Signal<number> = computed(() => {
+    const history = this.scoreChangeHistoryState();
+    if (history.length > 0) return history[history.length - 1].nextPoints;
+    return this.initialScore()?.total ?? 0;
+  });
   readonly workflowState: Signal<GradingWorkflowState | null> = computed(() => {
     const grading = this.gradingState();
-    return grading === null ? null : deriveGradingWorkflowState(grading);
+    if (grading === null) return null;
+    return deriveGradingWorkflowState(grading, { evaluationCount: deriveEvaluationCount(this.scoreChangeHistoryState()) });
   });
   readonly workflowStatus: Signal<GradingWorkflowStatus | null> = computed(() => this.workflowState()?.status ?? null);
   readonly isGradable: Signal<boolean> = computed(
@@ -126,6 +160,8 @@ export class RubricGradingFacade {
     this.lastReadOptions = readOptions;
     this.requestStateState.set(Object.freeze({ status: 'loading' }));
     this.gradingState.set(null);
+    this.scoreChangeHistoryState.set(EMPTY_SCORE_CHANGES);
+    this.scoreChangeStateState.set(IDLE_SCORE_CHANGE_STATE);
     if (normalizedAttemptId.length === 0) {
       const error = new RubricGradingFacadeError('not-ready', 'An attempt id is required.');
       this.requestStateState.set(Object.freeze({ status: 'error', message: error.message, retryable: false }));
@@ -149,6 +185,7 @@ export class RubricGradingFacade {
           return null;
         }
         this.gradingState.set(grading);
+        this.scoreChangeHistoryState.set(this.repository.listScoreChanges(normalizedAttemptId));
         this.requestStateState.set(Object.freeze({ status: 'ready' }));
         return grading;
       }),
@@ -169,10 +206,58 @@ export class RubricGradingFacade {
     return this.load(this.lastAttemptId, this.lastReadOptions);
   }
 
+  submitScoreChange(input: Readonly<{ readonly reason: string; readonly nextPoints: number }>): Observable<ScoreChangeEntry> {
+    if (this.destroyed) {
+      return throwError(() => new RubricGradingFacadeError('destroyed', 'The grading facade has been destroyed.'));
+    }
+    const grading = this.gradingState();
+    if (grading === null || this.requestStateState().status !== 'ready') {
+      return throwError(() => new RubricGradingFacadeError('not-ready', 'A grading attempt must be loaded before applying a score change.'));
+    }
+    const decision = decideGradingAttemptAccess(this.sessionStore.session(), grading.context);
+    if (!decision.allowed) {
+      this.scoreChangeStateState.set(Object.freeze({ status: 'error', message: decision.message, retryable: false }));
+      return throwError(() => new RubricGradingFacadeError('not-ready', decision.message));
+    }
+    const actorId = this.sessionStore.session()?.accountId;
+    if (typeof actorId !== 'string' || actorId.trim().length === 0) {
+      const message = 'A signed-in account is required to apply a score change.';
+      this.scoreChangeStateState.set(Object.freeze({ status: 'error', message, retryable: false }));
+      return throwError(() => new RubricGradingFacadeError('not-ready', message));
+    }
+
+    const attemptId = grading.context.attemptId;
+    const previousPoints = this.previousScoreChangeTotal();
+    const revision = ++this.requestRevision;
+    this.scoreChangeStateState.set(Object.freeze({ status: 'saving' }));
+
+    return defer(() => this.repository.submitScoreChange(
+      attemptId,
+      { reason: input.reason, nextPoints: input.nextPoints, previousPoints },
+      { actorId }
+    )).pipe(
+      map((entry) => {
+        if (revision === this.requestRevision) {
+          this.scoreChangeHistoryState.set(this.repository.listScoreChanges(attemptId));
+          this.scoreChangeStateState.set(Object.freeze({ status: 'saved' }));
+        }
+        return entry;
+      }),
+      catchError((error: unknown) => {
+        if (revision === this.requestRevision) {
+          this.scoreChangeStateState.set(scoreChangeStateForError(error));
+        }
+        return throwError(() => error);
+      })
+    );
+  }
+
   clear(): void {
     this.requestRevision += 1;
     this.gradingState.set(null);
     this.requestStateState.set(Object.freeze({ status: 'idle' }));
+    this.scoreChangeHistoryState.set(EMPTY_SCORE_CHANGES);
+    this.scoreChangeStateState.set(IDLE_SCORE_CHANGE_STATE);
   }
 
   ngOnDestroy(): void {

@@ -1,12 +1,14 @@
 import { signal, type WritableSignal } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, of } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 
 import { DEMO_ACCOUNTS, type AuthSession } from '../../../core/auth/authorization';
 import type { SessionStore } from '../../../core/auth/session.store';
 import { MockTransport } from '../../../core/api/mock-transport';
+import type { AuditEventDraft, AuditPort } from '../../../core/observability/observability.ports';
 import { RubricGradingFacade } from './rubric-grading.facade';
 import { createNeutralFixture, RubricGradingRepository } from './rubric-grading.repository';
+import { SCORE_CHANGE_ERROR_CODES, ScoreChangeError } from '../models/score-change.models';
 
 const instructorAccount = DEMO_ACCOUNTS.find((account) => account.roleCode === 'INSTRUCTOR')!;
 const studentAccount = DEMO_ACCOUNTS.find((account) => account.roleCode === 'STUDENT')!;
@@ -164,5 +166,128 @@ describe('RubricGradingFacade', () => {
     expect(facade.requestState().status).toBe('ready');
     expect(facade.context()?.attemptId).toBe('current-attempt');
     expect(facade.grading()).not.toBeNull();
+  });
+});
+
+class RecordingAuditPort {
+  readonly events: AuditEventDraft[] = [];
+  record(event: AuditEventDraft): void {
+    this.events.push(event);
+  }
+}
+
+describe('RubricGradingRepository score changes', () => {
+  it('rejects a blank reason with reasonRequired, leaves history and points unchanged, and records no audit event', async () => {
+    const audit = new RecordingAuditPort();
+    const repository = new RubricGradingRepository(new MockTransport(), audit as unknown as AuditPort);
+    await expect(
+      firstValueFrom(repository.submitScoreChange('attempt-blank', { reason: '   ', nextPoints: 80, previousPoints: 60 }, { actorId: 'instructor-1' }))
+    ).rejects.toMatchObject({ code: SCORE_CHANGE_ERROR_CODES.reasonRequired });
+    expect(repository.listScoreChanges('attempt-blank')).toEqual([]);
+    expect(audit.events).toHaveLength(0);
+  });
+
+  it('normalizes reason whitespace, appends the entry, and records exactly one readable audit event', async () => {
+    const audit = new RecordingAuditPort();
+    const repository = new RubricGradingRepository(new MockTransport(), audit as unknown as AuditPort);
+    const entry = await firstValueFrom(
+      repository.submitScoreChange('attempt-audit', { reason: '  Adjusted   after   re-read.  ', nextPoints: 82, previousPoints: 60 }, { actorId: 'instructor-9' })
+    );
+    expect(entry.reason).toBe('Adjusted after re-read.');
+    expect(entry.evaluationNumber).toBe(2);
+    expect(repository.listScoreChanges('attempt-audit')).toEqual([entry]);
+    expect(audit.events).toHaveLength(1);
+    const [event] = audit.events;
+    expect(event.action).toBe('grading.score-change');
+    expect(event.actor).toBe('instructor-9');
+    expect(event.targetType).toBe('grading-attempt');
+    expect(event.targetId).toBe('attempt-audit');
+    expect(() => new Date(event.occurredAt).toISOString()).not.toThrow();
+    expect(event.before).toMatchObject({ points: 60 });
+    expect(event.after).toMatchObject({ points: 82 });
+    expect(event.mandatoryReason).toBe('Adjusted after re-read.');
+  });
+
+  it('records no audit event when the mock transport reports service-error, unauthorized, or conflict', async () => {
+    for (const outcome of ['service-error', 'unauthorized', 'conflict'] as const) {
+      const audit = new RecordingAuditPort();
+      const repository = new RubricGradingRepository(new MockTransport(), audit as unknown as AuditPort);
+      repository.setMockScenario({ outcome });
+      await expect(
+        firstValueFrom(repository.submitScoreChange('attempt-fail', { reason: 'Valid reason for a retry.', nextPoints: 80, previousPoints: 60 }, { actorId: 'instructor-1' }))
+      ).rejects.toBeTruthy();
+      expect(audit.events).toHaveLength(0);
+      expect(repository.listScoreChanges('attempt-fail')).toEqual([]);
+    }
+  });
+});
+
+describe('RubricGradingFacade score changes', () => {
+  it('reports re-evaluated once every criterion is scored after one persisted score change', async () => {
+    const scoredFixture = createNeutralFixture('attempt-flow');
+    const scoredGrading = {
+      ...scoredFixture,
+      selectedLevelIds: Object.fromEntries(scoredFixture.rubric.criteria.map((criterion) => [criterion.id, criterion.levels.at(-1)!.id]))
+    };
+    const changeEntry = {
+      id: 'attempt-flow-change-2',
+      attemptId: 'attempt-flow',
+      previousPoints: 60,
+      nextPoints: 90,
+      delta: 30,
+      reason: 'Reconsidered the reasoning score.',
+      actorId: instructorAccount.id,
+      occurredAt: new Date().toISOString(),
+      evaluationNumber: 2
+    };
+    let history: typeof changeEntry[] = [];
+    const stubRepository = {
+      getByAttemptId: () => of(scoredGrading),
+      listScoreChanges: () => history,
+      submitScoreChange: () => {
+        history = [changeEntry];
+        return of(changeEntry);
+      }
+    } as unknown as RubricGradingRepository;
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(stubRepository, store);
+    await firstValueFrom(facade.load('attempt-flow'));
+    expect(facade.workflowStatus()).toBe('graded');
+
+    await firstValueFrom(facade.submitScoreChange({ reason: 'Reconsidered the reasoning score.', nextPoints: 90 }));
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.scoreChangeState().status).toBe('saved');
+    expect(facade.reEvaluationTimeline()).toHaveLength(1);
+    expect(facade.workflowStatus()).toBe('re-evaluated');
+  });
+
+  it('denies a score-change submission for a session without grading access and never calls the repository', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const submitSpy = repository.submitScoreChange.bind(repository);
+    let called = false;
+    repository.submitScoreChange = ((...args: Parameters<typeof submitSpy>) => {
+      called = true;
+      return submitSpy(...args);
+    }) as typeof submitSpy;
+    const { store, sessionSignal } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-deny'));
+    sessionSignal.set(studentSession());
+    await expect(firstValueFrom(facade.submitScoreChange({ reason: 'Attempted change.', nextPoints: 90 }))).rejects.toBeTruthy();
+    expect(called).toBe(false);
+    expect(facade.scoreChangeState().status).toBe('error');
+  });
+
+  it('never lets a stale score-change submission overwrite a newer state', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-stale'));
+    const stale = facade.submitScoreChange({ reason: 'First stale attempt.', nextPoints: 70 });
+    const current = facade.submitScoreChange({ reason: 'Second, newer attempt.', nextPoints: 95 });
+    await firstValueFrom(current);
+    await firstValueFrom(stale).catch(() => undefined);
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.scoreChangeHistory()[0].nextPoints).toBe(95);
   });
 });

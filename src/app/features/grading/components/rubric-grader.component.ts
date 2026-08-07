@@ -24,12 +24,14 @@ import {
 import { EMPTY, catchError, distinctUntilChanged, map } from 'rxjs';
 
 import { RequestStateComponent } from '../../../shared/components/request-state.component';
+import { ScoreChangePanelComponent } from './score-change-panel.component';
 import {
   MAX_CRITERION_COMMENT_LENGTH,
   MAX_OVERALL_FEEDBACK_LENGTH,
   type RubricCriterion,
   type RubricGrading
 } from '../models/rubric.models';
+import { MAX_SCORE_CHANGE_REASON_LENGTH } from '../models/score-change.models';
 import {
   selectRubricScore,
   type RubricCriterionScore,
@@ -72,7 +74,7 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
 @Component({
   selector: 'app-rubric-grader',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, RequestStateComponent],
+  imports: [CommonModule, ReactiveFormsModule, RequestStateComponent, ScoreChangePanelComponent],
   providers: [RubricGradingFacade],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -234,7 +236,20 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
               <div class="review-actions">
                 <p class="live-status" aria-live="polite">{{ liveStatus() }}</p>
                 <button type="submit" class="primary-button">Review rubric</button>
+                <button #applyScoreChangeTrigger type="button" class="secondary-action" [disabled]="!canApplyScoreChange()" (click)="openScoreChangeConfirmation()">Apply score change</button>
               </div>
+
+              @if (scoreChangeConfirmationOpen()) {
+                <app-score-change-panel
+                  [previousTotal]="facade.previousScoreChangeTotal()"
+                  [nextTotal]="scoringState()?.total ?? 0"
+                  [submitting]="scoreChangeSubmissionLocked()"
+                  [errorMessage]="facade.scoreChangeState().status === 'error' ? (facade.scoreChangeState().message ?? null) : null"
+                  [maxReasonLength]="maxScoreChangeReasonLength"
+                  (confirmed)="confirmScoreChange($event)"
+                  (cancelled)="cancelScoreChange()"
+                />
+              }
             </div>
 
             <aside class="context-sidebar" aria-labelledby="context-heading">
@@ -259,16 +274,35 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
                 <h2 id="total-heading" aria-live="polite">{{ formatPoints(scoringState()?.total ?? 0) }} <small>/ {{ formatPoints(grading.rubric.maximumPoints) }}</small></h2>
                 <p>{{ scoringState()?.isComplete ? 'All criteria are selected.' : 'Select every criterion to complete the rubric.' }}</p>
               </section>
-              <p class="context-note"><span aria-hidden="true">i</span> This screen only reviews local rubric input. It does not save, approve, or change the attempt.</p>
+              <section class="reevaluation-card" aria-labelledby="reevaluation-heading">
+                <span class="eyebrow">History</span>
+                <h2 id="reevaluation-heading">Re-evaluation timeline</h2>
+                @if (facade.reEvaluationTimeline().length === 0) {
+                  <p class="empty-state">No score changes have been recorded for this attempt yet.</p>
+                } @else {
+                  <ol class="reevaluation-list">
+                    @for (item of facade.reEvaluationTimeline(); track item.id) {
+                      <li class="reevaluation-item">
+                        <div class="reevaluation-item-heading">
+                          <span class="eyebrow">Evaluation {{ item.evaluationNumber }}</span>
+                          <time [attr.datetime]="item.occurredAt">{{ formatOccurredAt(item.occurredAt) }}</time>
+                        </div>
+                        <p class="reevaluation-actor">Changed by <strong>{{ item.actorId }}</strong></p>
+                        <p class="reevaluation-points"><span>{{ formatPoints(item.previousPoints) }} &rarr; {{ formatPoints(item.nextPoints) }}</span><strong>{{ item.delta >= 0 ? '+' : '' }}{{ formatPoints(item.delta) }}</strong></p>
+                        <p class="reevaluation-reason">{{ item.reason }}</p>
+                      </li>
+                    }
+                  </ol>
+                }
+              </section>
+              <p class="context-note"><span aria-hidden="true">i</span> Rubric selections and comments stay local until you apply a score change. Applying one records a reason, the previous and new total, and an audit event.</p>
             </aside>
           </div>
         </form>
       }
     </main>
   `,
-  styles: [`
-    :host{display:block;min-width:0}.rubric-grader{display:grid;gap:20px}.page-heading,.section-heading,.criterion-card-heading,.review-actions{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.page-heading h1,.section-heading h2,.criterion-card-heading h3,.context-card h2,.progress-card h2,.total-card h2{margin:0;color:var(--ui-text)}.page-heading h1{font-size:clamp(1.5rem,2vw,1.8rem)}.page-heading p,.rubric-description,.context-note,.progress-card p,.total-card p{margin:6px 0 0;color:var(--ui-text-muted)}.eyebrow{display:block;margin-bottom:5px;color:var(--ui-text-muted);font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.read-only-note,.status-chip,.weight-note,.weight-badge{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:6px 10px;border:1px solid var(--ui-border);border-radius:999px;background:var(--ui-surface-subtle);color:var(--ui-text-muted);font-size:.78rem;font-weight:700}.status-chip{color:var(--ui-success)}.response-preview,.rubric-card,.feedback-card,.context-card,.progress-card,.total-card{padding:20px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface);box-shadow:var(--ui-shadow-sm)}.response-preview{display:grid;gap:16px}.preview-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:20px}.question-copy,.response-copy{min-width:0}.response-copy{padding-left:20px;border-left:1px solid var(--ui-border)}.field-label,.comment-field>span{display:block;color:var(--ui-text-muted);font-size:.78rem;font-weight:800}.question-copy p,.response-text{margin:8px 0 16px;color:var(--ui-text);line-height:1.6}.response-text{white-space:pre-wrap}.preview-meta,.context-list{display:grid;gap:9px;margin:0}.preview-meta div,.context-list div{display:flex;justify-content:space-between;gap:12px}.preview-meta dt,.context-list dt{color:var(--ui-text-muted);font-size:.78rem}.preview-meta dd,.context-list dd{margin:0;color:var(--ui-text);font-size:.8rem;font-weight:700;text-align:right}.grading-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;align-items:start;gap:20px}.grading-main{display:grid;min-width:0;gap:20px}.rubric-card,.feedback-card{min-width:0}.rubric-description{font-size:.85rem}.matrix-desktop{overflow-x:auto;margin-top:16px}.rubric-matrix{width:100%;border-collapse:collapse;min-width:820px;font-size:.78rem}.rubric-matrix th,.rubric-matrix td{padding:12px 10px;border-top:1px solid var(--ui-border);vertical-align:top;text-align:left}.rubric-matrix thead th{background:var(--ui-surface-subtle);color:var(--ui-text-muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.04em}.rubric-matrix tbody th{width:22%;font-weight:400}.criterion-title,.criterion-description{display:block}.criterion-title{font-weight:800;color:var(--ui-text)}.criterion-description{margin-top:5px;color:var(--ui-text-muted);line-height:1.4}.numeric{white-space:nowrap;font-variant-numeric:tabular-nums}.selected-score,.awarded-points{font-size:.9rem}.awarded-points span{color:var(--ui-text-muted);font-size:.75rem}.level-list{display:grid;gap:7px;min-width:0;border:0;padding:0;margin:0}.level-option{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:start;gap:7px;min-height:44px;padding:7px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-sm);background:var(--ui-surface);cursor:pointer}.level-option:hover,.level-option.is-selected{border-color:var(--ui-primary);background:var(--ui-primary-soft)}.level-option input{width:18px;height:18px;margin:4px 0}.level-option span{display:grid;gap:2px}.level-option strong{color:var(--ui-text);font-size:.78rem}.level-option small{color:var(--ui-text-muted);line-height:1.35}.level-option b{font-variant-numeric:tabular-nums}.comment-field{display:grid;gap:6px;margin-top:12px}.comment-field textarea{width:100%;box-sizing:border-box;min-height:44px;resize:vertical;padding:9px;border:1px solid var(--ui-border-strong);border-radius:var(--ui-radius-sm);font:inherit;color:var(--ui-text);background:var(--ui-surface)}.comment-field textarea:focus-visible,.level-option:has(input:focus-visible){outline:3px solid color-mix(in srgb,var(--ui-focus) 35%,transparent);outline-offset:2px}.field-help{display:block;color:var(--ui-text-muted);font-size:.72rem}.field-error{display:block;margin-top:6px;color:var(--ui-danger);font-size:.75rem;font-weight:700}.criterion-cards{display:none}.validation-summary{padding:14px 16px;border:2px solid var(--ui-danger);border-radius:var(--ui-radius-md);background:var(--ui-danger-soft)}.validation-summary h2{margin:0;font-size:1rem}.validation-summary ul{margin:8px 0 0;padding-left:20px}.validation-summary a{color:var(--ui-text);font-weight:700}.context-sidebar{display:grid;gap:16px}.context-card,.progress-card,.total-card{display:grid;gap:14px}.avatar{display:grid;width:40px;height:40px;place-items:center;border-radius:50%;background:var(--ui-primary-soft);color:var(--ui-primary);font-weight:800}.progress-card .section-heading{align-items:center}.progress-track{height:10px;overflow:hidden;border-radius:999px;background:var(--ui-border)}.progress-track span{display:block;height:100%;background:var(--ui-primary);transition:width .15s ease}.progress-card p,.total-card p{font-size:.8rem}.total-card h2{font-size:2rem;font-variant-numeric:tabular-nums}.total-card h2 small{font-size:.9rem;color:var(--ui-text-muted)}.context-note{padding:12px;border-left:3px solid var(--ui-info);font-size:.78rem;line-height:1.5}.context-note span{display:inline-grid;width:20px;height:20px;place-items:center;margin-right:5px;border:1px solid var(--ui-info);border-radius:50%;color:var(--ui-info);font-weight:800}.review-actions{align-items:center}.live-status{min-height:24px;margin:0;color:var(--ui-text-muted);font-size:.8rem}.primary-button{min-height:44px;padding:9px 18px;border:1px solid var(--ui-primary);border-radius:var(--ui-radius-sm);background:var(--ui-primary);color:var(--ui-surface);font:inherit;font-weight:800;cursor:pointer}.primary-button:hover{background:var(--ui-primary-hover)}button:focus-visible,a:focus-visible{outline:3px solid var(--ui-focus);outline-offset:2px}.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.workflow-status{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-sm);background:var(--ui-surface-subtle);font-size:.78rem;font-weight:700;color:var(--ui-text)}.workflow-status-progress{color:var(--ui-text-muted);font-weight:600}@media(max-width:900px){.grading-layout{grid-template-columns:1fr}.context-sidebar{grid-template-columns:repeat(2,minmax(0,1fr))}.context-note{grid-column:1/-1}}@media(max-width:760px){.page-heading,.section-heading,.review-actions{flex-direction:column}.preview-grid{grid-template-columns:1fr}.response-copy{padding-left:0;border-left:0;border-top:1px solid var(--ui-border);padding-top:16px}.matrix-desktop{display:none}.criterion-cards{display:grid;gap:12px;margin-top:16px}.criterion-card{display:grid;gap:10px;padding:16px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface-subtle)}.criterion-card p{margin:0;color:var(--ui-text-muted);font-size:.82rem;line-height:1.45}.criterion-card-heading{align-items:center}.criterion-card-heading h3{font-size:1rem}.criterion-total{display:flex;justify-content:space-between;gap:12px;padding-top:10px;border-top:1px solid var(--ui-border);font-size:.82rem}.context-sidebar{grid-template-columns:1fr}.context-note{grid-column:auto}.rubric-card,.feedback-card,.response-preview,.context-card,.progress-card,.total-card{padding:16px}.review-actions .primary-button{width:100%}}@media(prefers-reduced-motion:reduce){.progress-track span{transition:none}}
-  `]
+  styles: [`:host{--b:1px solid var(--ui-border);--r:var(--ui-radius-md);--s:var(--ui-radius-sm)}.page-heading,.section-heading,.criterion-card-heading,.review-actions{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.page-heading h1{font-size:clamp(1.5rem,2vw,1.8rem)}.page-heading p,.rubric-description,.context-note,.progress-card p,.total-card p{margin:6px 0 0;color:var(--ui-text-muted)}.status-chip{color:var(--ui-success)}.response-preview,.rubric-card,.feedback-card,.context-card,.progress-card,.total-card{padding:20px;border:var(--b);border-radius:var(--r);background:var(--ui-surface);box-shadow:var(--ui-shadow-sm)}.response-copy{padding-left:20px;border-left:var(--b)}.question-copy p,.response-text{margin:8px 0 16px;line-height:1.6}.response-text{white-space:pre-wrap}.preview-meta,.context-list{display:grid;gap:9px;margin:0}.preview-meta dt,.context-list dt{color:var(--ui-text-muted);font-size:.78rem}.preview-meta dd,.context-list dd{margin:0;font-size:.8rem;font-weight:700;text-align:right}.rubric-description{font-size:.85rem}.matrix-desktop{overflow-x:auto;margin-top:16px}.rubric-matrix :is(th,td){padding:12px 10px;border-top:var(--b);vertical-align:top;text-align:left}.rubric-matrix tbody th{width:22%;font-weight:400}.criterion-title{font-weight:800}.level-list{display:grid;gap:7px;min-width:0;border:0;padding:0;margin:0}.level-option:is(:hover,.is-selected){border-color:var(--ui-primary);background:var(--ui-primary-soft)}.level-option input{width:18px;height:18px;margin:4px 0}.level-option span{display:grid;gap:2px}.comment-field textarea:focus-visible,.level-option:has(input:focus-visible){outline:3px solid color-mix(in srgb,var(--ui-focus) 35%,transparent)}.criterion-cards{display:none}.validation-summary{padding:14px 16px;border:2px solid var(--ui-danger);border-radius:var(--r);background:var(--ui-danger-soft)}.validation-summary h2{margin:0;font-size:1rem}.validation-summary ul{margin:8px 0 0;padding-left:20px}.validation-summary a{color:var(--ui-text);font-weight:700}.context-card,.progress-card,.total-card{display:grid;gap:14px}.progress-track{height:10px;overflow:hidden;border-radius:999px;background:var(--ui-border)}.progress-track span{display:block;height:100%;background:var(--ui-primary);transition:width .15s ease}.progress-card p,.total-card p{font-size:.8rem}.primary-button:hover{background:var(--ui-primary-hover)}.reevaluation-actor,.reevaluation-reason{margin:0;font-size:.78rem;line-height:1.4}.criterion-card-heading h3{font-size:1rem}.comment-field textarea,.secondary-action{border:1px solid var(--ui-border-strong);border-radius:var(--s);color:var(--ui-text);background:var(--ui-surface)}.comment-field textarea{width:100%;min-height:44px;resize:vertical;padding:9px}.read-only-note,.status-chip,.weight-note,.weight-badge,.workflow-status,.reevaluation-item,.criterion-card{border:var(--b);background:var(--ui-surface-subtle)}.read-only-note,.status-chip,.weight-note,.weight-badge{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:6px 10px;border-radius:999px;color:var(--ui-text-muted);font-size:.78rem;font-weight:700}.eyebrow,.field-help,.reevaluation-item-heading time{color:var(--ui-text-muted);font-size:.72rem}.numeric,.level-option b,.total-card h2,.reevaluation-points{font-variant-numeric:tabular-nums}.total-card h2{font-size:2rem}.reevaluation-item-heading,.reevaluation-points{display:flex;align-items:center;justify-content:space-between;gap:8px}.reevaluation-points{margin:0;font-weight:800}.primary-button,.secondary-action{min-height:44px;padding:9px 18px;font-weight:800;cursor:pointer}.criterion-card{display:grid;gap:10px;padding:16px;border-radius:var(--r)}.progress-card .section-heading,.review-actions,.criterion-card-heading,.workflow-status{align-items:center}.live-status,.reevaluation-card .empty-state{margin:0;color:var(--ui-text-muted);font-size:.8rem}.live-status{min-height:24px}.level-option,.reevaluation-item,.primary-button,.workflow-status{border-radius:var(--s)}.level-option{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:start;gap:7px;min-height:44px;padding:7px;border:var(--b);background:var(--ui-surface);cursor:pointer}.reevaluation-item{display:grid;gap:4px;padding:10px}.primary-button{border:1px solid var(--ui-primary);background:var(--ui-primary);color:var(--ui-surface)}.workflow-status{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:8px 10px;font-size:.78rem;font-weight:700}.preview-meta div,.context-list div,.criterion-total{display:flex;justify-content:space-between;gap:12px}.criterion-total{padding-top:10px;border-top:var(--b);font-size:.82rem}.field-label,.comment-field>span{color:var(--ui-text-muted);font-size:.78rem;font-weight:800}.avatar,.context-note span{place-items:center;border-radius:50%;font-weight:800}.avatar{display:grid;width:40px;height:40px;background:var(--ui-primary-soft);color:var(--ui-primary)}.context-note span{display:inline-grid;width:20px;height:20px;margin-right:5px;border:1px solid var(--ui-info);color:var(--ui-info)}.response-preview,.context-sidebar{display:grid;gap:16px}.rubric-grader,.preview-grid,.grading-layout,.grading-main{display:grid;gap:20px}.preview-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}.grading-layout{grid-template-columns:minmax(0,1fr) 320px;align-items:start}.required-mark,.eyebrow{font-weight:800;text-transform:uppercase}.required-mark{color:var(--ui-danger);font-size:.7rem}.eyebrow{margin-bottom:5px;letter-spacing:.08em}.criterion-card p{font-size:.82rem;line-height:1.45}:host,.criterion-title,.criterion-description,.field-error,.eyebrow,.field-help,.field-label,.comment-field>span{display:block}.question-copy,.response-copy,.rubric-card,.feedback-card,:host,.grading-main{min-width:0}.rubric-matrix thead th,.secondary-action:hover{background:var(--ui-surface-subtle)}.criterion-description,.awarded-points span,.level-option small,.total-card h2 small,.workflow-status-progress,.criterion-card p,.rubric-matrix thead th{color:var(--ui-text-muted)}.criterion-description{margin-top:5px;line-height:1.4}.level-option small{line-height:1.35}.workflow-status-progress{font-weight:600}.rubric-matrix thead th{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em}.selected-score,.awarded-points,.total-card h2 small{font-size:.9rem}:is(.section-heading,.context-card,.progress-card,.total-card) h2,.page-heading h1,.criterion-card-heading h3,.criterion-card p{margin:0}.comment-field{display:grid;gap:6px}.comment-field{margin-top:12px}.rubric-matrix,.level-option strong,.context-note{font-size:.78rem}.rubric-matrix{width:100%;border-collapse:collapse;min-width:820px}.context-note{padding:12px;border-left:3px solid var(--ui-info);line-height:1.5}.field-error,.awarded-points span{font-size:.75rem}.field-error{margin-top:6px;color:var(--ui-danger);font-weight:700}.reevaluation-card,.reevaluation-list{display:grid;gap:10px}.reevaluation-list{margin:0;padding:0;list-style:none}.visually-hidden,.numeric{white-space:nowrap}.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}@media(max-width:760px){.page-heading,.section-heading,.review-actions{flex-direction:column}.response-copy{padding-left:0;border-left:0;border-top:var(--b);padding-top:16px}.matrix-desktop{display:none}.criterion-cards{display:grid;gap:12px;margin-top:16px}.context-note{grid-column:auto}.rubric-card,.feedback-card,.response-preview,.context-card,.progress-card,.total-card{padding:16px}.review-actions :is(.primary-button,.secondary-action){width:100%}.preview-grid,.context-sidebar{grid-template-columns:1fr}}@media(max-width:900px){.grading-layout{grid-template-columns:1fr}.context-sidebar{grid-template-columns:repeat(2,minmax(0,1fr))}.context-note{grid-column:1/-1}}@media(prefers-reduced-motion:reduce){.progress-track span{transition:none}}`]
 })
 export class RubricGraderComponent {
   readonly facade = inject(RubricGradingFacade);
@@ -285,6 +319,10 @@ export class RubricGraderComponent {
   readonly reviewAttempted = signal(false);
   readonly liveStatus = signal('');
   @ViewChild('validationSummary') private validationSummary?: ElementRef<HTMLElement>;
+  readonly maxScoreChangeReasonLength = MAX_SCORE_CHANGE_REASON_LENGTH;
+  readonly scoreChangeConfirmationOpen = signal(false);
+  readonly scoreChangeSubmissionLocked = signal(false);
+  @ViewChild('applyScoreChangeTrigger') private applyScoreChangeTrigger?: ElementRef<HTMLButtonElement>;
 
   constructor() {
     this.rubricForm.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.recalculate());
@@ -424,5 +462,49 @@ export class RubricGraderComponent {
   workflowStatusLabel(): string {
     const status = this.liveWorkflowStatus();
     return status === null ? WORKFLOW_STATUS_LABELS.pending : WORKFLOW_STATUS_LABELS[status];
+  }
+
+  canApplyScoreChange(): boolean {
+    const rubric = this.facade.rubric();
+    if (rubric === null || rubric.criteria.length === 0) return false;
+    return this.rubricForm.valid
+      && this.completedCriteria() === rubric.criteria.length
+      && this.facade.isGradable()
+      && !this.scoreChangeSubmissionLocked();
+  }
+
+  openScoreChangeConfirmation(): void {
+    if (!this.canApplyScoreChange()) return;
+    this.scoreChangeConfirmationOpen.set(true);
+  }
+
+  cancelScoreChange(): void {
+    if (!this.scoreChangeConfirmationOpen()) return;
+    this.scoreChangeConfirmationOpen.set(false);
+    this.applyScoreChangeTrigger?.nativeElement.focus();
+  }
+
+  confirmScoreChange(reason: string): void {
+    if (!this.scoreChangeConfirmationOpen() || this.scoreChangeSubmissionLocked()) return;
+    this.scoreChangeSubmissionLocked.set(true);
+    const nextPoints = this.scoringState()?.total ?? 0;
+    this.facade.submitScoreChange({ reason, nextPoints }).pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe({
+      next: () => {
+        this.scoreChangeSubmissionLocked.set(false);
+        this.scoreChangeConfirmationOpen.set(false);
+        this.liveStatus.set(`Score change applied. New total ${this.formatPoints(nextPoints)}.`);
+        afterNextRender({ write: () => this.applyScoreChangeTrigger?.nativeElement.focus() }, { injector: this.renderInjector });
+      },
+      error: () => {
+        this.scoreChangeSubmissionLocked.set(false);
+      }
+    });
+  }
+
+  formatOccurredAt(value: string): string {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
   }
 }
