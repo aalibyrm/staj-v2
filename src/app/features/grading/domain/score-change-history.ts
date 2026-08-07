@@ -1,9 +1,9 @@
 /**
  * Pure score-change history operations: chronological append with duplicate
  * and out-of-order guards, evaluation counting, a newest-first re-evaluation
- * timeline view, and the readable audit draft for a persisted change. No
- * Angular, RxJS, transport, or storage imports — everything here is
- * deterministic and side-effect free.
+ * timeline view (persisted and optimistic), and the readable audit draft for
+ * a persisted change. No Angular, RxJS, transport, or storage imports —
+ * everything here is deterministic and side-effect free.
  */
 import { SCORE_CHANGE_ERROR_CODES, ScoreChangeError, type ScoreChangeEntry } from '../models/score-change.models';
 import type { AuditEventDraft } from '../../../core/observability/observability.ports';
@@ -17,6 +17,16 @@ export type ReEvaluationTimelineItem = Readonly<{
   readonly delta: number;
   readonly reason: string;
   readonly evaluationNumber: number;
+  /** `true` only for the optimistic, not-yet-persisted item `selectOptimisticTimeline` prepends. */
+  readonly pending: boolean;
+}>;
+
+/** An in-flight score change applied optimistically before persistence confirms it. */
+export type PendingScoreChange = Readonly<{
+  readonly previousPoints: number;
+  readonly nextPoints: number;
+  readonly reason: string;
+  readonly actorId: string;
 }>;
 
 const EMPTY_TIMELINE: readonly ReEvaluationTimelineItem[] = Object.freeze([]);
@@ -66,10 +76,43 @@ export const selectReEvaluationTimeline = (history: readonly ScoreChangeEntry[])
           nextPoints: entry.nextPoints,
           delta: entry.delta,
           reason: entry.reason,
-          evaluationNumber: entry.evaluationNumber
+          evaluationNumber: entry.evaluationNumber,
+          pending: false
         })
       )
   );
+};
+
+/** `deriveEvaluationCount`, plus one more evaluation while a change is pending but not yet persisted. */
+export const deriveOptimisticEvaluationCount = (
+  history: readonly ScoreChangeEntry[],
+  pending: PendingScoreChange | null
+): number => deriveEvaluationCount(history) + (pending === null ? 0 : 1);
+
+/**
+ * `selectReEvaluationTimeline` with the in-flight `pending` change prepended
+ * as one extra, newest item (`id: 'pending'`, no `occurredAt`) when a change
+ * is being applied optimistically. Returns the persisted timeline unchanged
+ * when `pending` is `null`.
+ */
+export const selectOptimisticTimeline = (
+  history: readonly ScoreChangeEntry[],
+  pending: PendingScoreChange | null
+): readonly ReEvaluationTimelineItem[] => {
+  const persisted = selectReEvaluationTimeline(history);
+  if (pending === null) return persisted;
+  const pendingItem: ReEvaluationTimelineItem = Object.freeze({
+    id: 'pending',
+    occurredAt: '',
+    actorId: pending.actorId,
+    previousPoints: pending.previousPoints,
+    nextPoints: pending.nextPoints,
+    delta: pending.nextPoints - pending.previousPoints,
+    reason: pending.reason,
+    evaluationNumber: deriveEvaluationCount(history) + 1,
+    pending: true
+  });
+  return Object.freeze([pendingItem, ...persisted]);
 };
 
 /**

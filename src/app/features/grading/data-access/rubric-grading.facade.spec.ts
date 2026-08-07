@@ -1,10 +1,12 @@
 import { signal, type WritableSignal } from '@angular/core';
-import { firstValueFrom, of } from 'rxjs';
+import { firstValueFrom, of, throwError } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 
 import { DEMO_ACCOUNTS, type AuthSession } from '../../../core/auth/authorization';
 import type { SessionStore } from '../../../core/auth/session.store';
+import { ApiTransportError } from '../../../core/api/api-error';
 import { MockTransport } from '../../../core/api/mock-transport';
+import { NotificationPort, type NotificationMessage } from '../../../core/observability/notification.port';
 import type { AuditEventDraft, AuditPort } from '../../../core/observability/observability.ports';
 import { RubricGradingFacade } from './rubric-grading.facade';
 import { createNeutralFixture, RubricGradingRepository } from './rubric-grading.repository';
@@ -287,6 +289,196 @@ describe('RubricGradingFacade score changes', () => {
     const current = facade.submitScoreChange({ reason: 'Second, newer attempt.', nextPoints: 95 });
     await firstValueFrom(current);
     await firstValueFrom(stale).catch(() => undefined);
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.scoreChangeHistory()[0].nextPoints).toBe(95);
+  });
+});
+
+class RecordingNotificationPort extends NotificationPort {
+  readonly messages: NotificationMessage[] = [];
+  override notify(message: NotificationMessage): void {
+    this.messages.push(message);
+  }
+}
+
+class ThrowingNotificationPort extends NotificationPort {
+  override notify(): void {
+    throw new Error('Notification delivery failed.');
+  }
+}
+
+describe('RubricGradingFacade optimistic score changes', () => {
+  it('shows the pending change while saving, clears it on success, appends exactly one history entry, and emits no notification', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const notifications = new RecordingNotificationPort();
+    const facade = new RubricGradingFacade(repository, store, notifications);
+    await firstValueFrom(facade.load('attempt-optimistic-success'));
+
+    const submission = facade.submitScoreChange({ reason: 'Reconsidered after a re-read.', nextPoints: 88 });
+    expect(facade.pendingScoreChange()).toEqual({
+      previousPoints: 0,
+      nextPoints: 88,
+      reason: 'Reconsidered after a re-read.',
+      actorId: instructorAccount.id
+    });
+    expect(facade.scoreChangeState().status).toBe('saving');
+    expect(facade.displayedScoreTotal()).toBe(88);
+
+    await firstValueFrom(submission);
+    expect(facade.pendingScoreChange()).toBeNull();
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.scoreChangeState().status).toBe('saved');
+    expect(facade.lastNotification()).toBeNull();
+    expect(notifications.messages).toHaveLength(0);
+  });
+
+  it('rolls back a service-error failure from a zero baseline to an empty history and notifies with a retry action', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const notifications = new RecordingNotificationPort();
+    const facade = new RubricGradingFacade(repository, store, notifications);
+    await firstValueFrom(facade.load('attempt-rollback-zero'));
+    repository.setMockScenario({ outcome: 'service-error' });
+
+    await expect(
+      firstValueFrom(facade.submitScoreChange({ reason: 'Reconsidered after a re-read.', nextPoints: 90 }))
+    ).rejects.toBeTruthy();
+
+    expect(facade.pendingScoreChange()).toBeNull();
+    expect(facade.previousScoreChangeTotal()).toBe(0);
+    expect(facade.displayedScoreTotal()).toBe(0);
+    expect(facade.scoreChangeHistory()).toEqual([]);
+    expect(facade.scoreChangeState().status).toBe('error');
+    expect(notifications.messages).toHaveLength(1);
+    expect(notifications.messages[0].kind).toBe('service');
+    expect(notifications.messages[0].actions.some((action) => action.type === 'retry')).toBe(true);
+    expect(facade.lastNotification()).toEqual(notifications.messages[0]);
+  });
+
+  it('rolls back a failed second change to the exact total left by an earlier successful change, leaving persisted history unchanged', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-rollback-second'));
+    await firstValueFrom(facade.submitScoreChange({ reason: 'First reconsideration after a re-read.', nextPoints: 72 }));
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.previousScoreChangeTotal()).toBe(72);
+
+    repository.setMockScenario({ outcome: 'service-error' });
+    await expect(
+      firstValueFrom(facade.submitScoreChange({ reason: 'Second reconsideration, which fails.', nextPoints: 95 }))
+    ).rejects.toBeTruthy();
+
+    expect(facade.pendingScoreChange()).toBeNull();
+    expect(facade.previousScoreChangeTotal()).toBe(72);
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.scoreChangeHistory()[0].nextPoints).toBe(72);
+  });
+
+  it('rolls back unauthorized and conflict failures and maps each to a non-retryable notification', async () => {
+    const expectedText: Record<'unauthorized' | 'conflict', string> = {
+      unauthorized: 'You are not authorized to perform this action.',
+      conflict: 'This change conflicts with a newer version. Refresh before trying again.'
+    };
+    for (const outcome of ['unauthorized', 'conflict'] as const) {
+      const repository = new RubricGradingRepository(new MockTransport());
+      const { store } = fakeSessionStore(authorizedInstructorSession());
+      const notifications = new RecordingNotificationPort();
+      const facade = new RubricGradingFacade(repository, store, notifications);
+      await firstValueFrom(facade.load(`attempt-${outcome}-rollback`));
+      repository.setMockScenario({ outcome });
+
+      await expect(
+        firstValueFrom(facade.submitScoreChange({ reason: 'Attempted change.', nextPoints: 80 }))
+      ).rejects.toBeTruthy();
+
+      expect(facade.pendingScoreChange()).toBeNull();
+      expect(facade.scoreChangeHistory()).toEqual([]);
+      expect(notifications.messages).toHaveLength(1);
+      expect(notifications.messages[0].actions).toEqual([]);
+      expect(notifications.messages[0].text).toBe(expectedText[outcome]);
+    }
+  });
+
+  it('still rolls back when the notification port throws', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const stubRepository = {
+      getByAttemptId: repository.getByAttemptId.bind(repository),
+      listScoreChanges: repository.listScoreChanges.bind(repository),
+      submitScoreChange: () => throwError(() => new ApiTransportError('service', 1))
+    } as unknown as RubricGradingRepository;
+    const facade = new RubricGradingFacade(stubRepository, store, new ThrowingNotificationPort());
+    await firstValueFrom(facade.load('attempt-throwing-port'));
+
+    await expect(
+      firstValueFrom(facade.submitScoreChange({ reason: 'Attempted change.', nextPoints: 80 }))
+    ).rejects.toBeTruthy();
+
+    expect(facade.pendingScoreChange()).toBeNull();
+    expect(facade.scoreChangeHistory()).toEqual([]);
+    expect(facade.scoreChangeState().status).toBe('error');
+    expect(facade.lastNotification()).not.toBeNull();
+  });
+
+  it('shows the optimistic re-evaluated workflow status while pending and reverts to the pre-submit status after rollback', async () => {
+    const scoredFixture = createNeutralFixture('attempt-workflow-rollback');
+    const scoredGrading = {
+      ...scoredFixture,
+      selectedLevelIds: Object.fromEntries(scoredFixture.rubric.criteria.map((criterion) => [criterion.id, criterion.levels.at(-1)!.id]))
+    };
+    const stubRepository = {
+      getByAttemptId: () => of(scoredGrading),
+      listScoreChanges: () => [],
+      submitScoreChange: () => throwError(() => new ApiTransportError('service', 1))
+    } as unknown as RubricGradingRepository;
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(stubRepository, store);
+    await firstValueFrom(facade.load('attempt-workflow-rollback'));
+    expect(facade.workflowStatus()).toBe('graded');
+
+    const submission = facade.submitScoreChange({ reason: 'Reconsidered the reasoning score.', nextPoints: 92 });
+    expect(facade.workflowStatus()).toBe('re-evaluated');
+
+    await firstValueFrom(submission).catch(() => undefined);
+    expect(facade.workflowStatus()).toBe('graded');
+  });
+
+  it('rejects a denied session or a missing actor without ever setting a pending change', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store, sessionSignal } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-denied-pending'));
+
+    sessionSignal.set(studentSession());
+    await expect(firstValueFrom(facade.submitScoreChange({ reason: 'Attempted change.', nextPoints: 90 }))).rejects.toBeTruthy();
+    expect(facade.pendingScoreChange()).toBeNull();
+
+    sessionSignal.set(Object.freeze({ ...authorizedInstructorSession(), accountId: '   ' }) as unknown as AuthSession);
+    await expect(firstValueFrom(facade.submitScoreChange({ reason: 'Attempted change.', nextPoints: 90 }))).rejects.toBeTruthy();
+    expect(facade.pendingScoreChange()).toBeNull();
+  });
+
+  it('never lets a stale, later-failing submission clear a newer pending change or overwrite its outcome', async () => {
+    const repository = new RubricGradingRepository(new MockTransport());
+    const { store } = fakeSessionStore(authorizedInstructorSession());
+    const facade = new RubricGradingFacade(repository, store);
+    await firstValueFrom(facade.load('attempt-stale-pending'));
+
+    repository.setMockScenario({ outcome: 'service-error' });
+    const stale = facade.submitScoreChange({ reason: 'First, stale, and it will fail.', nextPoints: 70 });
+    repository.resetMockScenario();
+    const current = facade.submitScoreChange({ reason: 'Second, newer, and it will succeed.', nextPoints: 95 });
+    expect(facade.pendingScoreChange()?.nextPoints).toBe(95);
+
+    await firstValueFrom(current);
+    expect(facade.pendingScoreChange()).toBeNull();
+    expect(facade.scoreChangeHistory()).toHaveLength(1);
+    expect(facade.scoreChangeHistory()[0].nextPoints).toBe(95);
+
+    await firstValueFrom(stale).catch(() => undefined);
+    expect(facade.pendingScoreChange()).toBeNull();
     expect(facade.scoreChangeHistory()).toHaveLength(1);
     expect(facade.scoreChangeHistory()[0].nextPoints).toBe(95);
   });

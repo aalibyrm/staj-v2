@@ -15,9 +15,19 @@ import {
 
 import { normalizeApplicationError } from '../../../core/api/api-error';
 import { SessionStore } from '../../../core/auth/session.store';
+import {
+  mapApplicationErrorToNotification,
+  NotificationPort,
+  type NotificationMessage
+} from '../../../core/observability/notification.port';
 import { decideGradingAttemptAccess, type GradingAccessDecision } from '../domain/grading-access';
 import { deriveGradingWorkflowState } from '../domain/grading-workflow';
-import { deriveEvaluationCount, selectReEvaluationTimeline, type ReEvaluationTimelineItem } from '../domain/score-change-history';
+import {
+  deriveOptimisticEvaluationCount,
+  selectOptimisticTimeline,
+  type PendingScoreChange,
+  type ReEvaluationTimelineItem
+} from '../domain/score-change-history';
 import {
   selectRubricScore,
   type RubricScoringResult
@@ -98,6 +108,8 @@ export class RubricGradingFacade {
   private readonly gradingState = signal<RubricGrading | null>(null);
   private readonly scoreChangeHistoryState = signal<readonly ScoreChangeEntry[]>(EMPTY_SCORE_CHANGES);
   private readonly scoreChangeStateState = signal<RubricScoreChangeState>(IDLE_SCORE_CHANGE_STATE);
+  private readonly pendingScoreChangeState = signal<PendingScoreChange | null>(null);
+  private readonly lastNotificationState = signal<NotificationMessage | null>(null);
   private requestRevision = 0;
   private lastAttemptId: string | null = null;
   private lastReadOptions: RubricGradingReadOptions = Object.freeze({});
@@ -121,8 +133,10 @@ export class RubricGradingFacade {
     decideGradingAttemptAccess(this.sessionStore.session(), this.context())
   );
   readonly scoreChangeHistory: Signal<readonly ScoreChangeEntry[]> = this.scoreChangeHistoryState.asReadonly();
+  readonly pendingScoreChange: Signal<PendingScoreChange | null> = this.pendingScoreChangeState.asReadonly();
+  readonly lastNotification: Signal<NotificationMessage | null> = this.lastNotificationState.asReadonly();
   readonly reEvaluationTimeline: Signal<readonly ReEvaluationTimelineItem[]> = computed(() =>
-    selectReEvaluationTimeline(this.scoreChangeHistoryState())
+    selectOptimisticTimeline(this.scoreChangeHistoryState(), this.pendingScoreChangeState())
   );
   readonly scoreChangeState: Signal<RubricScoreChangeState> = this.scoreChangeStateState.asReadonly();
   /** The total this attempt currently carries, before any new in-progress score change is applied. */
@@ -131,10 +145,15 @@ export class RubricGradingFacade {
     if (history.length > 0) return history[history.length - 1].nextPoints;
     return this.initialScore()?.total ?? 0;
   });
+  /** The total to display: the pending optimistic total while a change is in flight, otherwise the last persisted total. */
+  readonly displayedScoreTotal: Signal<number> = computed(() => {
+    const pending = this.pendingScoreChangeState();
+    return pending !== null ? pending.nextPoints : this.previousScoreChangeTotal();
+  });
   readonly workflowState: Signal<GradingWorkflowState | null> = computed(() => {
     const grading = this.gradingState();
     if (grading === null) return null;
-    return deriveGradingWorkflowState(grading, { evaluationCount: deriveEvaluationCount(this.scoreChangeHistoryState()) });
+    return deriveGradingWorkflowState(grading, { evaluationCount: deriveOptimisticEvaluationCount(this.scoreChangeHistoryState(), this.pendingScoreChangeState()) });
   });
   readonly workflowStatus: Signal<GradingWorkflowStatus | null> = computed(() => this.workflowState()?.status ?? null);
   readonly isGradable: Signal<boolean> = computed(
@@ -143,7 +162,8 @@ export class RubricGradingFacade {
 
   constructor(
     @Optional() repository: RubricGradingRepository | null = null,
-    @Optional() session: SessionStore | null = null
+    @Optional() session: SessionStore | null = null,
+    @Optional() private readonly notifications: NotificationPort | null = null
   ) {
     this.repository = repository ?? new RubricGradingRepository();
     this.sessionStore = session ?? new SessionStore();
@@ -162,6 +182,8 @@ export class RubricGradingFacade {
     this.gradingState.set(null);
     this.scoreChangeHistoryState.set(EMPTY_SCORE_CHANGES);
     this.scoreChangeStateState.set(IDLE_SCORE_CHANGE_STATE);
+    this.pendingScoreChangeState.set(null);
+    this.lastNotificationState.set(null);
     if (normalizedAttemptId.length === 0) {
       const error = new RubricGradingFacadeError('not-ready', 'An attempt id is required.');
       this.requestStateState.set(Object.freeze({ status: 'error', message: error.message, retryable: false }));
@@ -228,8 +250,13 @@ export class RubricGradingFacade {
 
     const attemptId = grading.context.attemptId;
     const previousPoints = this.previousScoreChangeTotal();
+    const priorHistory = this.scoreChangeHistoryState();
     const revision = ++this.requestRevision;
+    this.pendingScoreChangeState.set(
+      Object.freeze({ previousPoints, nextPoints: input.nextPoints, reason: input.reason, actorId })
+    );
     this.scoreChangeStateState.set(Object.freeze({ status: 'saving' }));
+    this.lastNotificationState.set(null);
 
     return defer(() => this.repository.submitScoreChange(
       attemptId,
@@ -238,6 +265,7 @@ export class RubricGradingFacade {
     )).pipe(
       map((entry) => {
         if (revision === this.requestRevision) {
+          this.pendingScoreChangeState.set(null);
           this.scoreChangeHistoryState.set(this.repository.listScoreChanges(attemptId));
           this.scoreChangeStateState.set(Object.freeze({ status: 'saved' }));
         }
@@ -245,7 +273,16 @@ export class RubricGradingFacade {
       }),
       catchError((error: unknown) => {
         if (revision === this.requestRevision) {
+          this.pendingScoreChangeState.set(null);
+          this.scoreChangeHistoryState.set(priorHistory);
           this.scoreChangeStateState.set(scoreChangeStateForError(error));
+          const notification = mapApplicationErrorToNotification(normalizeApplicationError(error));
+          this.lastNotificationState.set(notification);
+          try {
+            this.notifications?.notify(notification);
+          } catch {
+            // A throwing notification port must never prevent the rollback above.
+          }
         }
         return throwError(() => error);
       })
@@ -258,6 +295,8 @@ export class RubricGradingFacade {
     this.requestStateState.set(Object.freeze({ status: 'idle' }));
     this.scoreChangeHistoryState.set(EMPTY_SCORE_CHANGES);
     this.scoreChangeStateState.set(IDLE_SCORE_CHANGE_STATE);
+    this.pendingScoreChangeState.set(null);
+    this.lastNotificationState.set(null);
   }
 
   ngOnDestroy(): void {

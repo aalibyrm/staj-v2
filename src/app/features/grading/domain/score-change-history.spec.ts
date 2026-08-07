@@ -11,7 +11,10 @@ import {
   appendScoreChange,
   buildScoreChangeAuditDraft,
   deriveEvaluationCount,
-  selectReEvaluationTimeline
+  deriveOptimisticEvaluationCount,
+  selectOptimisticTimeline,
+  selectReEvaluationTimeline,
+  type PendingScoreChange
 } from './score-change-history';
 
 const baseInput = (overrides: Partial<ScoreChangeEntryInput> = {}): ScoreChangeEntryInput => ({
@@ -161,5 +164,53 @@ describe('buildScoreChangeAuditDraft', () => {
     expect(draft.after).toMatchObject({ points: 75 });
     expect(draft.mandatoryReason).toBe(entry.reason);
     expect(JSON.stringify(draft)).not.toContain('STUDENT-SECRET-01');
+  });
+});
+
+describe('selectOptimisticTimeline', () => {
+  it('returns the persisted timeline unchanged when pending is null', () => {
+    const first = createScoreChangeEntry(baseInput());
+    const timeline = selectOptimisticTimeline([first], null);
+    expect(timeline).toEqual(selectReEvaluationTimeline([first]));
+    expect(timeline.every((item) => item.pending === false)).toBe(true);
+  });
+
+  it('prepends a frozen pending item ahead of an empty history', () => {
+    const pending: PendingScoreChange = { previousPoints: 0, nextPoints: 40, reason: 'Applying now.', actorId: 'instructor-1' };
+    const timeline = selectOptimisticTimeline([], pending);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      id: 'pending',
+      occurredAt: '',
+      actorId: 'instructor-1',
+      previousPoints: 0,
+      nextPoints: 40,
+      delta: 40,
+      reason: 'Applying now.',
+      evaluationNumber: 2,
+      pending: true
+    });
+    expect(Object.isFrozen(timeline)).toBe(true);
+    expect(Object.isFrozen(timeline[0])).toBe(true);
+  });
+
+  it('prepends the pending item ahead of an existing persisted history', () => {
+    const first = createScoreChangeEntry(baseInput());
+    const pending: PendingScoreChange = { previousPoints: 75, nextPoints: 60, reason: 'Second look.', actorId: 'instructor-2' };
+    const timeline = selectOptimisticTimeline([first], pending);
+    expect(timeline.map((item) => item.id)).toEqual(['pending', first.id]);
+    expect(timeline[0].evaluationNumber).toBe(3);
+    expect(timeline[0].pending).toBe(true);
+    expect(timeline[1].pending).toBe(false);
+  });
+});
+
+describe('deriveOptimisticEvaluationCount', () => {
+  it('matches deriveEvaluationCount when pending is null and adds one more evaluation while a change is pending', () => {
+    const first = createScoreChangeEntry(baseInput());
+    expect(deriveOptimisticEvaluationCount([], null)).toBe(deriveEvaluationCount([]));
+    expect(deriveOptimisticEvaluationCount([first], null)).toBe(deriveEvaluationCount([first]));
+    const pending: PendingScoreChange = { previousPoints: 75, nextPoints: 60, reason: 'Second look.', actorId: 'instructor-2' };
+    expect(deriveOptimisticEvaluationCount([first], pending)).toBe(deriveEvaluationCount([first]) + 1);
   });
 });

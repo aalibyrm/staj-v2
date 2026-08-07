@@ -43,6 +43,7 @@ import {
   type RubricGradingRequestStatus
 } from '../data-access/rubric-grading.facade';
 import type { RubricGradingReadOptions } from '../data-access/rubric-grading.repository';
+import type { NotificationAction, NotificationMessage } from '../../../core/observability/notification.port';
 import type { GradingWorkflowStatus } from '../models/grading-workflow.models';
 
 type CriterionFormControls = {
@@ -239,9 +240,18 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
                 <button #applyScoreChangeTrigger type="button" class="secondary-action" [disabled]="!canApplyScoreChange()" (click)="openScoreChangeConfirmation()">Apply score change</button>
               </div>
 
+              @if (facade.lastNotification(); as notification) {
+                <p class="field-error" role="alert" aria-live="assertive">
+                  {{ notification.text }}
+                  @if (retryAction(notification); as action) {
+                    <button type="button" class="secondary-action" (click)="openScoreChangeConfirmation()">{{ action.label }}</button>
+                  }
+                </p>
+              }
+
               @if (scoreChangeConfirmationOpen()) {
                 <app-score-change-panel
-                  [previousTotal]="facade.previousScoreChangeTotal()"
+                  [previousTotal]="facade.displayedScoreTotal()"
                   [nextTotal]="scoringState()?.total ?? 0"
                   [submitting]="scoreChangeSubmissionLocked()"
                   [errorMessage]="facade.scoreChangeState().status === 'error' ? (facade.scoreChangeState().message ?? null) : null"
@@ -285,7 +295,11 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
                       <li class="reevaluation-item">
                         <div class="reevaluation-item-heading">
                           <span class="eyebrow">Evaluation {{ item.evaluationNumber }}</span>
-                          <time [attr.datetime]="item.occurredAt">{{ formatOccurredAt(item.occurredAt) }}</time>
+                          @if (item.pending) {
+                            <span class="eyebrow">Applying…</span>
+                          } @else {
+                            <time [attr.datetime]="item.occurredAt">{{ formatOccurredAt(item.occurredAt) }}</time>
+                          }
                         </div>
                         <p class="reevaluation-actor">Changed by <strong>{{ item.actorId }}</strong></p>
                         <p class="reevaluation-points"><span>{{ formatPoints(item.previousPoints) }} &rarr; {{ formatPoints(item.nextPoints) }}</span><strong>{{ item.delta >= 0 ? '+' : '' }}{{ formatPoints(item.delta) }}</strong></p>
@@ -487,20 +501,26 @@ export class RubricGraderComponent {
   confirmScoreChange(reason: string): void {
     if (!this.scoreChangeConfirmationOpen() || this.scoreChangeSubmissionLocked()) return;
     this.scoreChangeSubmissionLocked.set(true);
+    this.scoreChangeConfirmationOpen.set(false);
     const nextPoints = this.scoringState()?.total ?? 0;
     this.facade.submitScoreChange({ reason, nextPoints }).pipe(
       takeUntilDestroyed(this.destroyRef)
     ).subscribe({
       next: () => {
         this.scoreChangeSubmissionLocked.set(false);
-        this.scoreChangeConfirmationOpen.set(false);
         this.liveStatus.set(`Score change applied. New total ${this.formatPoints(nextPoints)}.`);
         afterNextRender({ write: () => this.applyScoreChangeTrigger?.nativeElement.focus() }, { injector: this.renderInjector });
       },
       error: () => {
         this.scoreChangeSubmissionLocked.set(false);
+        this.liveStatus.set('Score change failed. The previous total was restored.');
+        afterNextRender({ write: () => this.applyScoreChangeTrigger?.nativeElement.focus() }, { injector: this.renderInjector });
       }
     });
+  }
+
+  retryAction(notification: NotificationMessage): NotificationAction | null {
+    return notification.actions.find((action) => action.type === 'retry') ?? null;
   }
 
   formatOccurredAt(value: string): string {

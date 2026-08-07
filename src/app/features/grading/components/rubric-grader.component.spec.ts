@@ -4,6 +4,7 @@ import { DEMO_ACCOUNTS, type AuthSession } from '../../../core/auth/authorizatio
 import { SessionStore } from '../../../core/auth/session.store';
 import { RubricGradingFacade, type RubricGradingRequestState } from '../data-access/rubric-grading.facade';
 import { RubricGradingRepository } from '../data-access/rubric-grading.repository';
+import { MockTransport } from '../../../core/api/mock-transport';
 import type { GradingWorkflowState, GradingWorkflowStatus } from '../models/grading-workflow.models';
 import type { RubricGrading } from '../models/rubric.models';
 import { provideRouter } from '@angular/router';
@@ -166,6 +167,8 @@ describe('RubricGraderComponent', () => {
       reEvaluationTimeline: signal([]),
       scoreChangeState: signal({ status: 'idle' }),
       previousScoreChangeTotal: signal(0),
+      displayedScoreTotal: signal(0),
+      lastNotification: signal(null),
       load,
       retry
     } as unknown as RubricGradingFacade;
@@ -269,6 +272,8 @@ describe('RubricGraderComponent', () => {
       reEvaluationTimeline: signal([]),
       scoreChangeState: signal({ status: 'idle' }),
       previousScoreChangeTotal: signal(0),
+      displayedScoreTotal: signal(0),
+      lastNotification: signal(null),
       load,
       retry
     } as unknown as RubricGradingFacade;
@@ -356,5 +361,67 @@ describe('RubricGraderComponent', () => {
     expect(timelineItem?.textContent).toContain(instructorAccount.id);
     expect(timelineItem?.textContent).toContain('Evaluation 2');
     expect(document.activeElement).toBe(applyButton);
+  });
+
+  it('shows the pending marker while saving, then the assertive failure alert with a retry action that reopens the confirmation dialog', async () => {
+    TestBed.resetTestingModule();
+    const repository = new RubricGradingRepository(new MockTransport());
+    const sessionStore = { session: signal(authorizedInstructorSession()) } as unknown as SessionStore;
+    const facade = new RubricGradingFacade(repository, sessionStore);
+
+    TestBed.configureTestingModule({
+      imports: [RubricGraderComponent],
+      providers: [provideRouter([{ path: 'grading/:attemptId', component: RubricGraderComponent }])]
+    });
+    TestBed.overrideComponent(RubricGraderComponent, {
+      set: { providers: [{ provide: RubricGradingFacade, useValue: facade }] }
+    });
+    const harness = await RouterTestingHarness.create();
+    const component = await harness.navigateByUrl('/grading/attempt-optimistic-ui', RubricGraderComponent);
+    await harness.fixture.whenStable();
+    await vi.waitFor(() => {
+      expect(component.facade.rubric()?.criteria.length).toBe(3);
+    });
+    component.facade.rubric()?.criteria.forEach((criterion, index) => {
+      component.criterionForm(index).controls.levelId.setValue(criterion.levels.at(-1)?.id ?? null);
+    });
+    harness.detectChanges();
+
+    const element = harness.routeNativeElement as HTMLElement;
+    const applyButton = element.querySelector<HTMLButtonElement>('.review-actions .secondary-action');
+    applyButton?.click();
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+
+    repository.setMockScenario({ outcome: 'service-error' });
+    const reasonTextarea = element.querySelector<HTMLTextAreaElement>('#score-change-reason');
+    reasonTextarea!.value = 'Reconsidered after a second read, expecting failure.';
+    reasonTextarea!.dispatchEvent(new Event('input'));
+    harness.detectChanges();
+    const confirmButton = element
+      .querySelector<HTMLElement>('.score-change-confirmation')
+      ?.querySelector<HTMLButtonElement>('button[type="button"]:not(.secondary-action)');
+    confirmButton?.click();
+    harness.detectChanges();
+
+    expect(element.querySelector('.score-change-confirmation')).toBeNull();
+    expect(element.textContent).toContain('Applying…');
+
+    await vi.waitFor(() => {
+      expect(component.facade.lastNotification()).not.toBeNull();
+    });
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+
+    const alert = element.querySelector<HTMLElement>('[role="alert"][aria-live="assertive"]');
+    expect(alert?.textContent).toContain('The service is temporarily unavailable.');
+    expect(component.liveStatus()).toContain('previous total was restored');
+    const retryButton = alert?.querySelector<HTMLButtonElement>('button');
+    expect(retryButton).not.toBeNull();
+
+    retryButton?.click();
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+    expect(element.querySelector('.score-change-confirmation')).not.toBeNull();
   });
 });
