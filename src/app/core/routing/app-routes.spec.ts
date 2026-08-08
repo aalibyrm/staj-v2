@@ -143,6 +143,44 @@ describe('application routes', () => {
     expect(childLoader).toHaveBeenCalledTimes(1);
   });
 
+  it('denies a program manager direct student analytics link before loading its component', async () => {
+    const studentRoute = adaptiveLearningRoutes.find(
+      (route) => route.path === 'student/:id/analytics'
+    );
+    expect(studentRoute).toBeDefined();
+    if (studentRoute === undefined || studentRoute.loadComponent === undefined) return;
+    const originalLoadComponent = studentRoute.loadComponent;
+    const loaderSpy = vi.fn(originalLoadComponent);
+    studentRoute.loadComponent = loaderSpy;
+    const targetUrl = '/student/STUDENT-MATH101-2025-FALL-A-01/analytics';
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const sessionStore = TestBed.inject(SessionStore);
+
+    try {
+      const initialLoadCount = loaderSpy.mock.calls.length;
+      sessionStore.signIn(accountIdFor('PROGRAM_MANAGER'));
+      await harness.navigateByUrl(targetUrl);
+      expect(router.url).toBe('/unauthorized?returnUrl=%2Fstudent%2FSTUDENT-MATH101-2025-FALL-A-01%2Fanalytics');
+      expect(loaderSpy).toHaveBeenCalledTimes(initialLoadCount);
+      expect(harness.routeNativeElement?.querySelector('#student-analytics-heading')).toBeNull();
+
+      await harness.navigateByUrl('/unauthorized');
+      sessionStore.signIn(accountIdFor('STUDENT'));
+      await harness.navigateByUrl(targetUrl);
+      expect(router.url).toBe(targetUrl);
+      expect(harness.routeNativeElement?.querySelector('#student-analytics-heading')).not.toBeNull();
+
+      await harness.navigateByUrl('/unauthorized');
+      sessionStore.signIn(accountIdFor('INSTRUCTOR'));
+      await harness.navigateByUrl(targetUrl);
+      expect(router.url).toBe(targetUrl);
+      expect(harness.routeNativeElement?.querySelector('#student-analytics-heading')).not.toBeNull();
+    } finally {
+      studentRoute.loadComponent = originalLoadComponent;
+    }
+  });
+
   it('resolves every concrete route for its permitted demo role', async () => {
     const harness = await RouterTestingHarness.create();
     const router = TestBed.inject(Router);

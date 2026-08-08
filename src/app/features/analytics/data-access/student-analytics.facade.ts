@@ -56,7 +56,7 @@ const HEATMAP_LEGEND: readonly HeatmapLegendItem[] = Object.freeze([
   Object.freeze({ band: 'advanced', label: 'Advanced', range: '85–100%', marker: '✓' })
 ]);
 const EMPTY_STATE: AnalyticsRequestState = Object.freeze({ status: 'idle' });
-const roleSupportsAnalytics = (role: RoleCode): boolean => role === 'STUDENT' || role === 'INSTRUCTOR' || role === 'PROGRAM_MANAGER';
+const roleSupportsAnalytics = (role: RoleCode): boolean => role === 'STUDENT' || role === 'INSTRUCTOR';
 const freezeArray = <T>(items: readonly T[]): readonly T[] => Object.freeze([...items]);
 const percentLabel = (score: number | null): string => score === null ? 'No data' : `${Math.round(score * 100)}%`;
 const bandLabel = (score: MasteryOutcomeScore | undefined): string => score?.isMeasured ? `${score.band}` : 'No measurement';
@@ -74,7 +74,9 @@ function studentScope(session: AuthSession | null, studentId: string): { readonl
   const hasGrant = (kind: 'student' | 'cohort' | 'course', id: string): boolean => grants.some((grant) => grant.kind === kind && (grant.global === true || grant.ids.includes(id)));
   const allowed = session.account.roleCode === 'STUDENT'
     ? hasGrant('student', student.id) && session.account.scopeGrants.some((grant) => grant.kind === 'student' && grant.ids.includes(student.id))
-    : (hasGrant('student', student.id) || hasGrant('cohort', cohort.id) || hasGrant('course', course.id));
+    : session.account.roleCode === 'INSTRUCTOR'
+      ? (hasGrant('student', student.id) || hasGrant('cohort', cohort.id) || hasGrant('course', course.id))
+      : false;
   return allowed ? { student, cohort, course } : null;
 }
 

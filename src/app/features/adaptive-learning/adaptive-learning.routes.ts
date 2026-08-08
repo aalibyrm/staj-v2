@@ -217,8 +217,7 @@ export const adaptiveLearningRoutes: Routes = [
       title: 'Student analytics',
       [ROUTE_CAPABILITIES_DATA_KEY]: [
         ROUTE_CAPABILITIES.studentLearning,
-        ROUTE_CAPABILITIES.instructorTeaching,
-        ROUTE_CAPABILITIES.programWorkspace
+        ROUTE_CAPABILITIES.instructorTeaching
       ]
     },
     loadComponent: loadStudentAnalytics

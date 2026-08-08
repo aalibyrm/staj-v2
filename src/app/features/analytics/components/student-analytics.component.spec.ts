@@ -3,7 +3,8 @@ import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
 
-import { DEMO_ACCOUNTS } from '../../../core/auth/authorization';
+import { DEMO_ACCOUNTS, ROUTE_CAPABILITIES } from '../../../core/auth/authorization';
+import { ROUTE_CAPABILITIES_DATA_KEY } from '../../../core/auth/auth.guard';
 import { SessionStore } from '../../../core/auth/session.store';
 import { adaptiveLearningRoutes } from '../../adaptive-learning/adaptive-learning.routes';
 import { StudentAnalyticsComponent } from './student-analytics.component';
@@ -65,11 +66,15 @@ describe('StudentAnalyticsComponent', () => {
     }
   });
 
-  it('keeps the student route lazy and preserves the three route capabilities', async () => {
+  it('keeps the student route lazy behind exactly student and instructor capabilities', async () => {
     const route = adaptiveLearningRoutes.find((candidate) => candidate.path === 'student/:id/analytics');
     expect(route?.pathMatch).toBe('full');
     expect(route?.canMatch?.length).toBe(1);
     expect(route?.data?.['title']).toBe('Student analytics');
+    expect(route?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.studentLearning,
+      ROUTE_CAPABILITIES.instructorTeaching
+    ]);
     expect(route?.loadComponent).toBeDefined();
     const component = await route?.loadComponent?.();
     expect(component).toBe(StudentAnalyticsComponent);
@@ -165,5 +170,26 @@ describe('StudentAnalyticsComponent', () => {
       expect(fixture.componentInstance.facade.requestState().status).toBe('unauthorized')
     );
     expect(fixture.componentInstance.facade.kpis().length).toBe(0);
+  });
+
+  it('denies a switched program manager and clears sensitive student analytics state', async () => {
+    const fixture = createScreen();
+    const facade = fixture.componentInstance.facade;
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+    const context = facade.studentContext();
+    expect(context).not.toBeNull();
+    if (context === null) return;
+
+    sessionStore.switchAccount(accountIdFor('PROGRAM_MANAGER'));
+    fixture.detectChanges();
+    await vi.waitFor(() =>
+      expect(facade.requestState().status).toBe('unauthorized')
+    );
+    fixture.detectChanges();
+
+    expect(facade.studentContext()).toBeNull();
+    expect(facade.kpis()).toEqual([]);
+    expect(fixture.nativeElement.textContent).not.toContain(context.id);
+    expect(fixture.nativeElement.textContent).not.toContain(context.pseudonym);
   });
 });
