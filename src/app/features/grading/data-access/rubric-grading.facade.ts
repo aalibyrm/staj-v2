@@ -8,11 +8,12 @@ import {
 import {
   catchError,
   defer,
+  EMPTY,
+  finalize,
   map,
   throwError,
   type Observable
 } from 'rxjs';
-
 import { normalizeApplicationError } from '../../../core/api/api-error';
 import { SessionStore } from '../../../core/auth/session.store';
 import {
@@ -45,7 +46,7 @@ import type {
 } from '../models/rubric.models';
 import type { GradingWorkflowState, GradingWorkflowStatus } from '../models/grading-workflow.models';
 
-export type RubricGradingRequestStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'unauthorized';
+export type RubricGradingRequestStatus = 'idle' | 'loading' | 'slow' | 'ready' | 'empty' | 'error' | 'unauthorized';
 
 export type RubricGradingRequestState = Readonly<{
   readonly status: RubricGradingRequestStatus;
@@ -116,6 +117,7 @@ export class RubricGradingFacade {
   private requestRevision = 0;
   private lastAttemptId: string | null = null;
   private lastReadOptions: RubricGradingReadOptions = Object.freeze({});
+  private slowTimer: number | null = null;
   private destroyed = false;
 
   readonly requestState: Signal<RubricGradingRequestState> = this.requestStateState.asReadonly();
@@ -178,6 +180,7 @@ export class RubricGradingFacade {
     }
     const normalizedAttemptId = typeof attemptId === 'string' ? attemptId.trim() : '';
     const revision = ++this.requestRevision;
+    this.cancelSlowTimer();
     const readOptions = Object.freeze({ ...options });
     this.lastAttemptId = normalizedAttemptId;
     this.lastReadOptions = readOptions;
@@ -187,7 +190,17 @@ export class RubricGradingFacade {
     this.scoreChangeStateState.set(IDLE_SCORE_CHANGE_STATE);
     this.pendingScoreChangeState.set(null);
     this.lastNotificationState.set(null);
+    this.slowTimer = window.setTimeout(() => {
+      if (revision !== this.requestRevision || this.destroyed || this.requestStateState().status !== 'loading') return;
+      this.slowTimer = null;
+      this.requestStateState.set(Object.freeze({
+        status: 'slow',
+        message: 'The grading attempt is still loading. You can wait or retry.',
+        retryable: true
+      }));
+    }, 400);
     if (normalizedAttemptId.length === 0) {
+      this.cancelSlowTimer();
       const error = new RubricGradingFacadeError('not-ready', 'An attempt id is required.');
       this.requestStateState.set(Object.freeze({ status: 'error', message: error.message, retryable: false }));
       return throwError(() => error);
@@ -195,7 +208,8 @@ export class RubricGradingFacade {
 
     return defer(() => this.repository.getByAttemptId(normalizedAttemptId, readOptions)).pipe(
       map((grading) => {
-        if (revision !== this.requestRevision) return grading;
+        if (revision !== this.requestRevision || this.destroyed) return null;
+        this.cancelSlowTimer();
         if (grading === null) {
           this.gradingState.set(null);
           this.requestStateState.set(
@@ -215,21 +229,31 @@ export class RubricGradingFacade {
         return grading;
       }),
       catchError((error: unknown) => {
-        if (revision === this.requestRevision) {
+        if (revision === this.requestRevision && !this.destroyed) {
+          this.cancelSlowTimer();
           this.gradingState.set(null);
           this.requestStateState.set(stateForError(error));
         }
         return throwError(() => error);
+      }),
+      finalize(() => {
+        if (revision === this.requestRevision) this.cancelSlowTimer();
       })
     );
   }
 
   retry(): Observable<RubricGrading | null> {
+    const state = this.requestStateState();
     if (this.lastAttemptId === null || this.lastAttemptId.length === 0) {
       return throwError(() => new RubricGradingFacadeError('not-ready', 'There is no grading attempt to retry.'));
     }
+    if (this.destroyed ||
+      (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true))) {
+      return EMPTY;
+    }
     return this.load(this.lastAttemptId, this.lastReadOptions);
   }
+
 
   submitScoreChange(input: Readonly<{ readonly reason: string; readonly nextPoints: number }>): Observable<ScoreChangeEntry> {
     if (this.destroyed) {
@@ -301,6 +325,7 @@ export class RubricGradingFacade {
 
   clear(): void {
     this.requestRevision += 1;
+    this.cancelSlowTimer();
     this.gradingState.set(null);
     this.requestStateState.set(Object.freeze({ status: 'idle' }));
     this.scoreChangeHistoryState.set(EMPTY_SCORE_CHANGES);
@@ -308,10 +333,17 @@ export class RubricGradingFacade {
     this.pendingScoreChangeState.set(null);
     this.lastNotificationState.set(null);
   }
+  private cancelSlowTimer(): void {
+    if (this.slowTimer !== null) {
+      window.clearTimeout(this.slowTimer);
+      this.slowTimer = null;
+    }
+  }
 
   ngOnDestroy(): void {
     this.destroyed = true;
     this.requestRevision += 1;
+    this.cancelSlowTimer();
     this.gradingState.set(null);
   }
 }

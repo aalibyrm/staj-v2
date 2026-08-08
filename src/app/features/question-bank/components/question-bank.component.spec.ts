@@ -211,7 +211,7 @@ const responseFor = (query: QuestionListQuery, items: readonly Question[]): Ques
   });
 };
 
-type TestRequestMode = 'loading' | 'empty' | 'error' | 'unauthorized' | 'success';
+type TestRequestMode = 'loading' | 'slow' | 'empty' | 'error' | 'unauthorized' | 'success';
 
 class DeterministicQuestionBankFacade {
   readonly requestState = signal<QuestionBankRequestState>({ status: 'idle' });
@@ -224,15 +224,21 @@ class DeterministicQuestionBankFacade {
   readonly courseOptions = signal<readonly Question['course'][]>([testQuestion.course]);
   mode: TestRequestMode = 'success';
   selectionMode: 'valid' | 'stale' = 'valid';
+  private lastQuery = normalizeQuestionListQuery();
   readonly bulkUpdateResult$ = new Subject<QuestionBulkResult>();
 
   readonly loadQuestions = vi.fn((query: QuestionListQuery): Observable<QuestionListResponse> => {
+    this.lastQuery = query;
     this.requestState.set({ status: 'loading' });
     this.errorMessage.set('');
     this.pageResult.set(null);
     this.selectedId.set(null);
     this.selectedQuestion.set(null);
     if (this.mode === 'loading') return NEVER;
+    if (this.mode === 'slow') {
+      this.requestState.set({ status: 'slow', message: 'The question bank is still loading. You can wait or retry.', retryable: true });
+      return NEVER;
+    }
     if (this.mode === 'error') {
       this.errorMessage.set('Service unavailable.');
       this.requestState.set({ status: 'error', message: this.errorMessage() });
@@ -248,6 +254,8 @@ class DeterministicQuestionBankFacade {
     this.requestState.set({ status: response.total === 0 ? 'empty' : 'success' });
     return of(response);
   });
+
+  readonly retry = vi.fn(() => this.loadQuestions(this.lastQuery));
 
   readonly selectQuestion = vi.fn((id: QuestionId | string | null | undefined): Observable<Question | null> => {
     const normalized = typeof id === 'string' && id.trim().length > 0 ? asQuestionId(id.trim()) : null;
@@ -472,6 +480,7 @@ describe('QuestionBankComponent', () => {
   it('renders loading, empty, error, unauthorized, and success inspector states', () => {
     const cases: readonly [TestRequestMode, string][] = [
       ['loading', 'Loading questions'],
+      ['slow', 'Question bank response is taking longer'],
       ['empty', 'No matching questions'],
       ['error', 'Question service unavailable'],
       ['unauthorized', 'Question bank unavailable']
@@ -487,6 +496,66 @@ describe('QuestionBankComponent', () => {
     expect(successFixture.nativeElement.querySelector('.inspector-empty')).toBeNull();
     expect(successFixture.nativeElement.querySelector('.inspector')?.textContent).toContain(testQuestion.explanation);
   });
+
+  it('retries an unchanged query through the facade and preserves normalized selection state', () => {
+    const fixture = create({ search: 'behavior', selected: testQuestion.id }, 'success');
+    const component = fixture.componentInstance;
+    facade.mode = 'loading';
+    component.retryLoad();
+    fixture.detectChanges();
+    expect(facade.retry).toHaveBeenCalledTimes(1);
+    expect(component.activeQuery().search).toBe('behavior');
+    expect(facade.selectedQuestion()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.table-wrap')).toBeNull();
+    facade.mode = 'success';
+    component.retryLoad();
+    fixture.detectChanges();
+    expect(facade.retry).toHaveBeenCalledTimes(2);
+    expect(fixture.nativeElement.querySelector('.inspector')?.textContent).toContain(testQuestion.explanation);
+    expect(routeValues).toEqual({ search: 'behavior', selected: testQuestion.id });
+  });
+
+  it('clears stale rendered results on service error and denial, then recovers through the facade retry path', () => {
+    const fixture = create({ selected: testQuestion.id }, 'success');
+    const component = fixture.componentInstance;
+    const initial = fixture.nativeElement as HTMLElement;
+    expect(initial.querySelector('.table-wrap')).not.toBeNull();
+    expect(initial.querySelector('.inspector')?.textContent).toContain(testQuestion.explanation);
+
+    facade.mode = 'error';
+    void router.navigate([], { queryParams: { selected: null } });
+    component.retryLoad();
+    fixture.detectChanges();
+
+    const errorElement = fixture.nativeElement as HTMLElement;
+    expect(facade.loadQuestions).toHaveBeenCalledTimes(2);
+    expect(errorElement.querySelector('.table-state')?.textContent).toContain('Question service unavailable');
+    expect(errorElement.querySelector('.table-wrap')).toBeNull();
+    expect(errorElement.querySelector('.inspector')).toBeNull();
+    expect(facade.selectedQuestion()).toBeNull();
+    expect(errorElement.querySelector('button.retry-action')).not.toBeNull();
+
+    facade.mode = 'success';
+    void router.navigate([], { queryParams: { selected: testQuestion.id } });
+    fixture.detectChanges();
+    (errorElement.querySelector('button.retry-action') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(facade.loadQuestions).toHaveBeenCalledTimes(3);
+    expect(fixture.nativeElement.querySelector('.table-wrap')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.inspector')?.textContent).toContain(testQuestion.explanation);
+
+    facade.mode = 'unauthorized';
+    void router.navigate([], { queryParams: { selected: null } });
+    component.retryLoad();
+    fixture.detectChanges();
+    const deniedElement = fixture.nativeElement as HTMLElement;
+    expect(facade.loadQuestions).toHaveBeenCalledTimes(4);
+    expect(deniedElement.querySelector('.table-state')?.textContent).toContain('Question bank unavailable');
+    expect(deniedElement.querySelector('.table-wrap')).toBeNull();
+    expect(deniedElement.querySelector('.inspector')).toBeNull();
+    expect(deniedElement.querySelector('button.retry-action')).toBeNull();
+  });
+
 
   it('shows All as the sum of unfiltered status counts while a status filter is active', () => {
     const fixture = create({ status: 'published' });

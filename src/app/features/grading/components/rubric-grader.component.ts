@@ -91,12 +91,27 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
 
       @if (facade.requestState().status === 'loading') {
         <app-request-state state="loading" title="Loading grading attempt" message="Preparing the response and rubric workspace." />
+      } @else if (facade.requestState().status === 'slow') {
+        <app-request-state
+          state="slow"
+          title="Grading attempt is taking longer"
+          message="The grading attempt is still loading. You can wait or retry."
+          (retry)="retry()"
+        />
       } @else if (facade.requestState().status === 'empty') {
         <app-request-state state="empty" title="No grading attempt found" message="This route does not resolve to an available grading attempt." />
       } @else if (facade.requestState().status === 'unauthorized') {
         <app-request-state state="unauthorized" title="Grading unavailable" [message]="facade.errorMessage()" />
-      } @else if (facade.requestState().status === 'error') {
+      } @else if (facade.requestState().status === 'error' && facade.requestState().retryable === true) {
         <app-request-state state="error" title="Unable to load grading" [message]="facade.errorMessage()" (retry)="retry()" />
+      } @else if (facade.requestState().status === 'error') {
+        <section class="grading-request-error" role="alert" aria-live="assertive" aria-labelledby="grading-request-error-title" aria-describedby="grading-request-error-message">
+          <span aria-hidden="true">!</span>
+          <div>
+            <h2 id="grading-request-error-title">Unable to load grading</h2>
+            <p id="grading-request-error-message">{{ facade.errorMessage() }}</p>
+          </div>
+        </section>
       } @else if (facade.grading(); as grading) {
         <form class="grading-form" [formGroup]="rubricForm" (ngSubmit)="reviewRubric()" novalidate>
           <section class="response-preview" aria-labelledby="response-heading">
@@ -354,8 +369,7 @@ export class RubricGraderComponent {
   }
 
   load(attemptId: string, options: RubricGradingReadOptions = {}): void {
-    this.rubricForm.controls.criteria.clear();
-    this.scoringState.set(null);
+    this.clearGradingView();
     this.facade.load(attemptId, options).pipe(
       catchError(() => EMPTY),
       takeUntilDestroyed(this.destroyRef)
@@ -365,12 +379,27 @@ export class RubricGraderComponent {
   }
 
   retry(): void {
+    const state = this.facade.requestState();
+    if (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true)) return;
+    this.clearGradingView();
     this.facade.retry().pipe(
       catchError(() => EMPTY),
       takeUntilDestroyed(this.destroyRef)
     ).subscribe((grading) => {
       if (grading !== null) this.applyGrading(grading);
     });
+  }
+
+  private clearGradingView(): void {
+    this.rubricForm.controls.criteria.clear();
+    this.rubricForm.controls.overallFeedback.setValue('', { emitEvent: false });
+    this.rubricForm.markAsPristine();
+    this.rubricForm.markAsUntouched();
+    this.scoringState.set(null);
+    this.reviewAttempted.set(false);
+    this.liveStatus.set('');
+    this.scoreChangeConfirmationOpen.set(false);
+    this.scoreChangeSubmissionLocked.set(false);
   }
 
   private applyGrading(grading: RubricGrading): void {

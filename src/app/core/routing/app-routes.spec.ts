@@ -438,4 +438,25 @@ describe('application routes', () => {
       'Access denied'
     );
   });
+  it('routes an unauthenticated dashboard request to the public denied state without loading dashboard content', async () => {
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+
+    await harness.navigateByUrl('/learning/dashboard');
+
+    expect(router.url).toBe('/unauthorized?returnUrl=%2Flearning%2Fdashboard');
+    expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('Access denied');
+    expect(harness.routeNativeElement?.querySelector('#learning-dashboard-heading')).toBeNull();
+  });
+  it('denies every concrete product URL before loading protected content when signed out', async () => {
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const protectedUrls = [...new Set(concreteRoutes.map(([url]) => url))];
+
+    for (const url of protectedUrls) {
+      await harness.navigateByUrl(url);
+      expect(router.url).toBe(`/unauthorized?returnUrl=${encodeURIComponent(url)}`);
+      expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('Access denied');
+    }
+  });
 });

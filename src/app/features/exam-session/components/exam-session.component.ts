@@ -28,14 +28,33 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
 
       @if (facade.requestState().status === 'loading') {
         <app-request-state state="loading" title="Loading exam session" message="Preparing the question workspace." />
+      } @else if (facade.requestState().status === 'slow') {
+        <app-request-state
+          state="slow"
+          title="Exam session is taking longer"
+          message="The exam session is still loading. You can wait or retry."
+          (retry)="retry()"
+        />
       } @else if (facade.requestState().status === 'empty') {
         <app-request-state state="empty" title="No questions available" message="This exam session does not contain a question set." />
-      } @else if (facade.requestState().status === 'error' || facade.requestState().status === 'unauthorized') {
+      } @else if (facade.requestState().status === 'unauthorized') {
         <app-request-state
-          [state]="facade.requestState().status === 'unauthorized' ? 'unauthorized' : 'error'"
+          state="unauthorized"
+          title="Unable to open exam session"
+          [message]="facade.requestState().message"
+        />
+      } @else if (facade.requestState().status === 'error' && facade.requestState().retryable === true) {
+        <app-request-state
+          state="error"
           title="Unable to open exam session"
           [message]="facade.requestState().message"
           (retry)="retry()"
+        />
+      } @else if (facade.requestState().status === 'error') {
+        <app-request-state
+          state="unauthorized"
+          title="Unable to open exam session"
+          [message]="facade.requestState().message"
         />
       } @else if (facade.session() !== null && facade.questions().length > 0) {
         <header class="exam-header">
@@ -314,6 +333,7 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
     button { background:var(--ui-surface); border-radius:var(--ui-radius-sm); }
     .exam-session-page { max-width:1440px; margin:0 auto; padding:24px 28px 36px; display:grid; gap:18px; overflow-x:hidden; color:var(--ui-text); }
     .route-boundary-marker { display:none; }
+
     .exam-header { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; padding:18px 20px; }
     .exam-heading { min-width:0; }
     h1, h2, p { margin:0; }
@@ -484,6 +504,8 @@ export class ExamSessionComponent {
     return `${answer} · ${draft.flagged ? 'Flagged for review' : 'Not flagged'}`;
   }
   retry(): void {
+    const state = this.facade.requestState();
+    if (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true)) return;
     this.facade.retry().subscribe({ error: () => undefined });
   }
 

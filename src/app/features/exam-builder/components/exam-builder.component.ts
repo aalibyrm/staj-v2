@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, ElementRef, Injector, ViewChild, af
 import { ActivatedRoute } from '@angular/router';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators, type ValidationErrors, type ValidatorFn } from '@angular/forms';
 
+import { RequestStateComponent, type RequestStateKind } from '../../../shared/components/request-state.component';
 import { BlueprintConstraintEditorComponent } from './blueprint-constraint-editor.component';
 import { BlueprintConstraintPanelComponent } from './blueprint-constraint-panel.component';
 import { ExamBuilderFacade } from '../data-access/exam-builder.facade';
@@ -12,10 +13,10 @@ import type { ExamRuleInput } from '../models/exam.models';
 @Component({
   selector: 'app-exam-builder',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, BlueprintConstraintEditorComponent, BlueprintConstraintPanelComponent],
+  imports: [CommonModule, ReactiveFormsModule, RequestStateComponent, BlueprintConstraintEditorComponent, BlueprintConstraintPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main class="exam-builder-page" aria-labelledby="exam-builder-heading">
+    <main class="exam-builder-page" aria-labelledby="exam-builder-heading" [attr.aria-busy]="isBusy() ? 'true' : null">
       <header class="page-header">
         <div>
           <span class="eyebrow">Exam builder</span>
@@ -34,6 +35,25 @@ import type { ExamRuleInput } from '../models/exam.models';
       </nav>
 
       <p class="sr-only" role="status" aria-live="polite">{{ facade.liveUpdateText() }}</p>
+      <ng-container *ngIf="isCurrentExamLoadBlocking(); else readyEditor">
+        <app-request-state
+          *ngIf="currentExamLoadKind() as kind; else nonRetryableCurrentExamLoad"
+          [state]="kind"
+          [title]="currentExamLoadTitle(kind)"
+          [message]="currentExamLoadMessage()"
+          (retry)="retryCurrentExam()"
+        />
+        <ng-template #nonRetryableCurrentExamLoad>
+          <section class="route-load-error" role="alert" aria-live="assertive" aria-labelledby="current-exam-load-error-title" aria-describedby="current-exam-load-error-message">
+            <span aria-hidden="true">!</span>
+            <div>
+              <h2 id="current-exam-load-error-title">{{ currentExamLoadTitle('error') }}</h2>
+              <p id="current-exam-load-error-message">{{ currentExamLoadMessage() }}</p>
+            </div>
+          </section>
+        </ng-template>
+      </ng-container>
+      <ng-template #readyEditor>
       <p class="workflow-feedback" role="status" aria-live="polite" [attr.data-status]="facade.requestState().status">
         <strong>{{ facade.requestState().status | titlecase }}</strong><span>{{ facade.actionableMessage() }}</span>
       </p>
@@ -147,6 +167,7 @@ import type { ExamRuleInput } from '../models/exam.models';
           </section>
         </aside>
       </div>
+      </ng-template>
     </main>
   `,
   styles: [`
@@ -232,6 +253,7 @@ export class ExamBuilderComponent implements OnInit {
   @ViewChild('publishConfirmationPanel') private publishConfirmationPanel?: ElementRef<HTMLElement>;
   private readonly renderInjector = inject(Injector);
   private loadedRouteId: string | null = null;
+  readonly currentExamLoadState = computed(() => this.facade.currentExamLoadState?.() ?? { status: 'success' as const });
   readonly unmetRows = computed(() => {
     const comparison = this.facade.comparison();
     return [...comparison.outcomeBuckets, ...comparison.difficultyBuckets, ...comparison.questionTypeBuckets].filter((row) => row.status !== 'met');
@@ -245,9 +267,50 @@ export class ExamBuilderComponent implements OnInit {
 
   ngOnInit(): void {
     const id = this.route?.snapshot.paramMap.get('id')?.trim() ?? '';
-    if (id.length === 0 || this.loadedRouteId === id) return;
+    if (id.length === 0) {
+      this.loadedRouteId = null;
+      this.facade.startNewDraft?.();
+      return;
+    }
+    if (this.loadedRouteId === id) return;
     this.loadedRouteId = id;
     this.facade.loadCurrent?.(id)?.subscribe({ error: () => undefined });
+  }
+
+  currentExamLoadKind(): RequestStateKind | null {
+    const state = this.currentExamLoadState();
+    if (state.status === 'unauthorized') return 'unauthorized';
+    if (state.status === 'error' && state.retryable === true) return 'error';
+    if (state.status === 'slow') return 'slow';
+    if (state.status === 'loading') return 'loading';
+    return null;
+  }
+
+  isCurrentExamLoadBlocking(): boolean {
+    const status = this.currentExamLoadState().status;
+    return status === 'unauthorized' || status === 'error' || status === 'slow' || status === 'loading';
+  }
+
+  currentExamLoadTitle(kind: RequestStateKind): string {
+    if (kind === 'unauthorized') return 'Exam access unavailable';
+    if (kind === 'error') return 'Unable to load exam';
+    if (kind === 'slow') return 'Exam load is taking longer';
+    return 'Loading exam';
+  }
+
+  currentExamLoadMessage(): string {
+    const state = this.currentExamLoadState();
+    if (state.message !== undefined && state.message.length > 0) return state.message;
+    if (state.status === 'unauthorized') return 'You do not have permission to edit this exam.';
+    if (state.status === 'error') return 'The exam could not be loaded. Try again if the service is available.';
+    if (state.status === 'slow') return 'The exam is still loading. You can wait or try again.';
+    return 'Preparing the current exam editor.';
+  }
+
+  retryCurrentExam(): void {
+    const state = this.currentExamLoadState();
+    if (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true)) return;
+    this.facade.retryLoadCurrent?.()?.subscribe({ error: () => undefined });
   }
 
   summaryDescription(): string {
@@ -284,7 +347,9 @@ export class ExamBuilderComponent implements OnInit {
 
   isBusy(): boolean {
     const status = this.facade.requestState().status;
-    return status === 'loading' || status === 'saving' || status === 'publishing' || this.automaticSelectionState().status === 'loading';
+    const loadStatus = this.currentExamLoadState().status;
+    return status === 'loading' || status === 'saving' || status === 'publishing' ||
+      loadStatus === 'loading' || loadStatus === 'slow' || this.automaticSelectionState().status === 'loading';
   }
 
   saveDraft(): void {

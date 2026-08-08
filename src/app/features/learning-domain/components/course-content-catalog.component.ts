@@ -5,6 +5,7 @@ import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { Subject, catchError, debounceTime, distinctUntilChanged, EMPTY, switchMap, tap } from 'rxjs';
 
 import { SessionStore } from '../../../core/auth/session.store';
+import { RequestStateComponent } from '../../../shared/components/request-state.component';
 import { LearningDomainFacade } from '../data-access/learning-domain.facade';
 import type { ContentAccessContext, LearningDomainOperationOptions } from '../data-access/learning-domain.repository';
 import {
@@ -44,7 +45,7 @@ type QueryParamSource = { readonly get: (name: string) => string | null };
 @Component({
   selector: 'app-course-content-catalog',
   standalone: true,
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, RequestStateComponent],
   templateUrl: './course-content-catalog.component.html',
   styleUrl: './course-content-catalog.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -100,14 +101,18 @@ export class CourseContentCatalogComponent implements OnInit {
   readonly renderLimit = signal(PAGE_SIZE);
   readonly isLoading = computed(() => {
     const statuses = [this.courseRequest().status, this.outcomeRequest().status, this.contentRequest().status];
-    return this.authorizedSession() && !statuses.includes('error') &&
+    return this.authorizedSession() && !this.isUnauthorized() &&
+      !statuses.includes('error') && !statuses.includes('slow') &&
       (!this.hasAttemptedLoad() || statuses.includes('loading') ||
-        (this.contentRequest().status !== 'error' && !this.hasSuccessfulContentLoad()));
+        (this.contentRequest().status !== 'error' && this.contentRequest().status !== 'slow' && !this.hasSuccessfulContentLoad()));
   });
   readonly isUnauthorized = computed(() => !this.authorizedSession() ||
     this.courseRequest().status === 'unauthorized' || this.outcomeRequest().status === 'unauthorized' || this.contentRequest().status === 'unauthorized');
   readonly isServiceError = computed(() => !this.isUnauthorized() &&
     [this.courseRequest(), this.outcomeRequest(), this.contentRequest()].some((state) => state.status === 'error'));
+  readonly isSlow = computed(() => !this.isUnauthorized() && !this.isServiceError() &&
+    [this.courseRequest(), this.outcomeRequest(), this.contentRequest()].some((state) => state.status === 'slow'));
+  readonly isBusy = computed(() => this.isLoading() || this.isSlow());
   readonly hasActiveFilter = computed(() => {
     const value = this.currentFormValue();
     return value.search.trim().length > 0 || value.courseId.length > 0 || value.level.length > 0 ||

@@ -1,5 +1,5 @@
 import { Injectable, Optional, computed, signal, type Signal, type WritableSignal } from '@angular/core';
-import { catchError, concatMap, defer, from, map, of, switchMap, tap, throwError, toArray, type Observable } from 'rxjs';
+import { EMPTY, catchError, concatMap, defer, finalize, from, map, of, switchMap, tap, throwError, toArray, type Observable } from 'rxjs';
 
 import { normalizeApplicationError } from '../../../core/api/api-error';
 import { SessionStore } from '../../../core/auth/session.store';
@@ -23,10 +23,14 @@ import {
   type ExamSuccessorInput,
   type ExamUpdateInput,
   type ExamWorkflowRequestState,
-  type ExamWorkflowRequestStatus
+  type ExamWorkflowRequestStatus,
+  type ExamCurrentLoadState
 } from '../models/exam.models';
 import type { ExamBlueprint, ExamBlueprintComparison, ExamBlueprintCurrentCoverage } from '../models/exam-blueprint.models';
 import { ExamRepository } from './exam.repository';
+
+type CurrentExamLoadOptions = Readonly<{ readonly expectedVersion?: number }>;
+type LastCurrentExamLoad = Readonly<{ readonly id: string; readonly options: CurrentExamLoadOptions }>;
 
 type ExamAutomaticSelectionOptions = Pick<QuestionBankRequestOptions, 'session'>;
 
@@ -80,6 +84,21 @@ const freezeAutomaticSelectionState = (
   ...(message === undefined ? {} : { message }),
   ...(retryable ? { retryable: true } : {})
 });
+const emptyCurrentExamLoadState = (): ExamCurrentLoadState => Object.freeze({
+  status: 'idle',
+  message: 'Ready for a new exam draft.'
+});
+
+const freezeCurrentExamLoadState = (
+  status: ExamCurrentLoadState['status'],
+  message?: string,
+  retryable = false
+): ExamCurrentLoadState => Object.freeze({
+  status,
+  ...(message === undefined ? {} : { message }),
+  ...(retryable ? { retryable: true } : {})
+});
+
 
 const freezeCoverage = (input: ExamBlueprintCurrentCoverageInput): ExamBlueprintCurrentCoverage =>
   Object.freeze({
@@ -189,6 +208,11 @@ export class ExamBuilderFacade {
   private readonly targetState: WritableSignal<ExamBlueprint>;
   private readonly currentCoverageState: WritableSignal<ExamBlueprintCurrentCoverage>;
   private readonly currentExamState = signal<Exam | null>(null);
+  private readonly currentExamLoadStateState = signal<ExamCurrentLoadState>(emptyCurrentExamLoadState());
+  private currentExamLoadRevision = 0;
+  private currentExamLoadTimer: number | null = null;
+  private lastCurrentLoad: LastCurrentExamLoad | null = null;
+  private currentExamLoadDestroyed = false;
   private readonly historyState = signal<readonly Exam[]>(Object.freeze([]));
   private readonly selectedQuestionVersionsState = signal<readonly QuestionVersion[]>(Object.freeze([]));
   private readonly autoSelectionStateState = signal<ExamAutomaticSelectionState>(emptyAutomaticSelectionState());
@@ -197,6 +221,7 @@ export class ExamBuilderFacade {
   private readonly updateRevision = signal(0);
   private requestRevision = 0;
   private autoSelectionRevision = 0;
+  readonly currentExamLoadState: Signal<ExamCurrentLoadState> = this.currentExamLoadStateState.asReadonly();
 
   readonly target: Signal<ExamBlueprint>;
   readonly targetValid: Signal<boolean>;
@@ -351,27 +376,86 @@ export class ExamBuilderFacade {
     return this.retryAutoSelection(options);
   }
 
-  loadCurrent(id: string, options: { readonly expectedVersion?: number } = {}): Observable<Exam> {
-    const revision = ++this.requestRevision;
-    this.requestStateState.set({ status: 'loading' });
-    return this.repository.getCurrent(id, { ...this.sessionOptions(), ...options }).pipe(
+  loadCurrent(id: string, options: CurrentExamLoadOptions = {}): Observable<Exam> {
+    if (this.currentExamLoadDestroyed) return EMPTY;
+    const revision = ++this.currentExamLoadRevision;
+    this.requestRevision += 1;
+    this.clearCurrentExamLoadTimer();
+    const savedOptions = Object.freeze({ ...options });
+    this.lastCurrentLoad = Object.freeze({ id, options: savedOptions });
+    this.clearCurrentExamData();
+    this.requestStateState.set({ status: 'idle' });
+    this.currentExamLoadStateState.set(freezeCurrentExamLoadState('loading', 'Loading the current exam.'));
+    this.currentExamLoadTimer = setTimeout(() => {
+      if (revision !== this.currentExamLoadRevision || this.currentExamLoadDestroyed) return;
+      this.currentExamLoadTimer = null;
+      if (this.currentExamLoadStateState().status === 'loading') {
+        this.currentExamLoadStateState.set(freezeCurrentExamLoadState(
+          'slow',
+          'The exam is still loading. You can wait or try again.',
+          true
+        ));
+      }
+    }, 400);
+    const requestOptions = { ...this.sessionOptions(), ...savedOptions };
+    return this.repository.getCurrent(id, requestOptions).pipe(
       switchMap((exam) => exam.status === 'published'
         ? this.repository.listVersionHistory(exam.id, this.sessionOptions()).pipe(map((history) => ({ exam, history })))
         : of({ exam, history: Object.freeze([] as readonly Exam[]) })),
       tap(({ exam, history }) => {
-        if (revision !== this.requestRevision) return;
+        if (revision !== this.currentExamLoadRevision || this.currentExamLoadDestroyed) return;
+        this.clearCurrentExamLoadTimer();
         this.currentExamState.set(exam);
         this.historyState.set(history);
         this.applySelectedQuestionVersions(exam.questionVersions);
         this.settingsState.set(normalizeExamSettings(exam) ?? this.settingsState());
-        this.requestStateState.set({ status: 'success', message: 'Exam loaded successfully.' });
+        this.currentExamLoadStateState.set(freezeCurrentExamLoadState('success', 'Exam loaded successfully.'));
       }),
       map(({ exam }) => exam),
       catchError((error: unknown) => {
-        if (revision === this.requestRevision) this.requestStateState.set({ status: statusFromError(error), message: this.messageFor(error) });
+        if (revision === this.currentExamLoadRevision && !this.currentExamLoadDestroyed) {
+          this.clearCurrentExamLoadTimer();
+          const normalized = normalizeApplicationError(error);
+          const unauthorized = errorCodeOf(error) === 'unauthorized' || normalized.kind === 'unauthorized';
+          this.currentExamLoadStateState.set(freezeCurrentExamLoadState(
+            unauthorized ? 'unauthorized' : 'error',
+            unauthorized ? 'You do not have permission to view this exam.' : this.messageFor(error),
+            !unauthorized && normalized.retryable
+          ));
+        }
         return throwError(() => error);
+      }),
+      finalize(() => {
+        if (revision === this.currentExamLoadRevision) this.clearCurrentExamLoadTimer();
       })
     );
+  }
+
+  retryLoadCurrent(): Observable<Exam> {
+    const lastLoad = this.lastCurrentLoad;
+    const state = this.currentExamLoadStateState();
+    if (lastLoad === null || state.status === 'unauthorized' || (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true))) {
+      return EMPTY;
+    }
+    return this.loadCurrent(lastLoad.id, lastLoad.options);
+  }
+
+  startNewDraft(): void {
+    this.requestRevision += 1;
+    this.currentExamLoadRevision += 1;
+    this.clearCurrentExamLoadTimer();
+    this.lastCurrentLoad = null;
+    this.clearCurrentExamData();
+    const settings = normalizeExamSettings({ title: 'Untitled exam', durationMinutes: 60, rules: [] });
+    if (settings !== null) this.settingsState.set(settings);
+    this.requestStateState.set({ status: 'idle' });
+    this.currentExamLoadStateState.set(emptyCurrentExamLoadState());
+  }
+
+  ngOnDestroy(): void {
+    this.currentExamLoadDestroyed = true;
+    this.currentExamLoadRevision += 1;
+    this.clearCurrentExamLoadTimer();
   }
 
   loadHistory(id: string): Observable<readonly Exam[]> {
@@ -472,6 +556,19 @@ export class ExamBuilderFacade {
     const current = this.currentExamState();
     const expectedVersion = current?.version;
     return this.repository.updateDraft(id, input, { ...this.sessionOptions(), expectedVersion });
+  }
+
+  private clearCurrentExamData(): void {
+    this.currentExamState.set(null);
+    this.historyState.set(Object.freeze([]));
+    this.invalidateAutomaticSelection();
+    this.applySelectedQuestionVersions([]);
+  }
+
+  private clearCurrentExamLoadTimer(): void {
+    if (this.currentExamLoadTimer === null) return;
+    clearTimeout(this.currentExamLoadTimer);
+    this.currentExamLoadTimer = null;
   }
 
   private invalidateAutomaticSelection(): void {

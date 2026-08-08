@@ -1,5 +1,5 @@
 import { Inject, Injectable, InjectionToken, Optional, computed, signal, type Signal, type WritableSignal } from '@angular/core';
-import { Subject, catchError, debounceTime, defer, firstValueFrom, from, groupBy, interval, map, mergeMap, of, startWith, switchMap, tap, throwError, type Observable, type Subscription } from 'rxjs';
+import { EMPTY, Subject, catchError, debounceTime, defer, finalize, firstValueFrom, from, groupBy, interval, map, mergeMap, of, startWith, switchMap, tap, throwError, type Observable, type Subscription } from 'rxjs';
 
 import { normalizeApplicationError } from '../../../core/api/api-error';
 import {
@@ -37,7 +37,7 @@ import {
   type ExamQuestionInput
 } from '../models/answer-draft.models';
 
-export type ExamSessionRequestStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'unauthorized';
+export type ExamSessionRequestStatus = 'idle' | 'loading' | 'slow' | 'ready' | 'empty' | 'error' | 'unauthorized';
 
 export type ExamSessionRequestState = Readonly<{
   readonly status: ExamSessionRequestStatus;
@@ -292,6 +292,7 @@ export class ExamSessionFacade {
   private requestRevision = 0;
   private transitionRevision = 0;
   private lastRouteToken: string | null = null;
+  private slowTimer: ReturnType<typeof setTimeout> | null = null;
   private timerAnchor: ReferenceTimeSyncAnchor | null = null;
   private timerSubscription: Subscription | null = null;
   private expiryTransitionRequested = false;
@@ -409,6 +410,8 @@ export class ExamSessionFacade {
   ngOnDestroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.requestRevision += 1;
+    this.cancelSlowTimer();
     this.platformSubscription?.unsubscribe();
     this.platformSubscription = null;
     this.timerSubscription?.unsubscribe();
@@ -426,6 +429,9 @@ export class ExamSessionFacade {
     if (this.destroyed) return throwError(() => new ExamSessionFacadeError('not-ready', 'The exam session has been destroyed.'));
     const token = routeToken.trim();
     const revision = ++this.requestRevision;
+    this.cancelSlowTimer();
+    this.timerSubscription?.unsubscribe();
+    this.timerSubscription = null;
     this.autosaveConflictRevision += 1;
     this.autosaveConflictState.set(null);
     this.autosaveConflictRetryAction = null;
@@ -443,7 +449,17 @@ export class ExamSessionFacade {
     this.timerState.set(null);
     this.timerAnchor = null;
     this.expiryTransitionRequested = false;
+    this.slowTimer = setTimeout(() => {
+      if (revision !== this.requestRevision || this.destroyed || this.requestStateState().status !== 'loading') return;
+      this.slowTimer = null;
+      this.requestStateState.set(Object.freeze({
+        status: 'slow',
+        message: 'The exam session is still loading. You can wait or retry.',
+        retryable: true
+      }));
+    }, 400);
     if (token.length === 0) {
+      this.cancelSlowTimer();
       const error = new ExamSessionFacadeError('not-ready', 'An exam session token is required.');
       this.requestStateState.set({ status: 'error', message: error.message, retryable: false });
       return throwError(() => error);
@@ -460,25 +476,41 @@ export class ExamSessionFacade {
         drafts
       })),
       tap(({ result, drafts }) => {
-        if (revision !== this.requestRevision) return;
+        if (revision !== this.requestRevision || this.destroyed) return;
         this.applyLoadedResult(result, drafts);
         void this.refreshQueueState(result.session.id, revision, 0);
       }),
       map(({ result }) => result),
       catchError((error: unknown) => {
-        if (revision === this.requestRevision) {
-          this.requestStateState.set({ status: requestStatusForError(error), message: messageForError(error), retryable: true });
+        if (revision === this.requestRevision && !this.destroyed) {
+          this.cancelSlowTimer();
+          const status = requestStatusForError(error);
+          const normalized = normalizeApplicationError(error);
+          const retryable = status === 'error' &&
+            (normalized.retryable || (normalized.kind === 'unexpected' && error instanceof Error && errorCode(error).length === 0));
+          this.requestStateState.set({ status, message: messageForError(error), retryable });
           this.sessionState.set(null);
           this.questionsState.set(Object.freeze([]));
           this.draftsState.set(Object.freeze([]));
         }
         return throwError(() => error);
+      }),
+      finalize(() => {
+        if (revision === this.requestRevision) this.cancelSlowTimer();
       })
     );
   }
 
   retry(): Observable<ExamSessionLoadResult> {
-    return this.lastRouteToken === null ? throwError(() => new ExamSessionFacadeError('not-ready', 'There is no exam session to retry.')) : this.load(this.lastRouteToken);
+    const state = this.requestStateState();
+    if (this.lastRouteToken === null) {
+      return throwError(() => new ExamSessionFacadeError('not-ready', 'There is no exam session to retry.'));
+    }
+    if (this.destroyed || state.status === 'unauthorized' ||
+      (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true))) {
+      return EMPTY;
+    }
+    return this.load(this.lastRouteToken);
   }
 
   navigateTo(index: number): boolean {
@@ -715,6 +747,7 @@ export class ExamSessionFacade {
   }
 
   private applyLoadedResult(result: ExamSessionLoadResult, persistedDrafts: readonly AnswerDraft[]): void {
+    this.cancelSlowTimer();
     this.sessionState.set(result.session);
     this.questionsState.set(result.questions);
     this.currentIndexState.set(0);
@@ -1155,6 +1188,13 @@ export class ExamSessionFacade {
     this.autosaveRequests.complete();
     this.autosaveRequests = new Subject<AutosaveRequest>();
     this.startAutosavePipeline();
+  }
+
+  private cancelSlowTimer(): void {
+    if (this.slowTimer !== null) {
+      clearTimeout(this.slowTimer);
+      this.slowTimer = null;
+    }
   }
 
   private activateIfCreated(session: ExamSession): Observable<ExamSession> {

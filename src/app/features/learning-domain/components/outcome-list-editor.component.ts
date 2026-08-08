@@ -101,7 +101,7 @@ type QueryFormControls = {
   imports: [ReactiveFormsModule, RequestStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <section class="outcome-workspace" aria-labelledby="outcome-list-editor-heading">
+    <section class="outcome-workspace" [attr.aria-busy]="isBusy() ? 'true' : null" aria-labelledby="outcome-list-editor-heading">
       <header class="page-heading">
         <span class="eyebrow">Program manager workspace</span>
         <h1 id="outcome-list-editor-heading">Outcomes</h1>
@@ -116,18 +116,25 @@ type QueryFormControls = {
           title="Outcome access unavailable"
           message="You do not have permission to view or manage outcomes."
         />
-      } @else if (isLoading()) {
-        <app-request-state
-          state="loading"
-          title="Loading outcomes"
-          message="Courses and outcomes are loading. Please wait."
-        />
       } @else if (isServiceError()) {
         <app-request-state
           state="error"
           title="Unable to load outcomes"
           [message]="serviceErrorMessage()"
           (retry)="retryLoad()"
+        />
+      } @else if (isSlow()) {
+        <app-request-state
+          state="slow"
+          title="Outcome list is taking longer than expected"
+          message="Courses and outcomes are still loading. You can wait or retry without losing your filters."
+          (retry)="retryLoad()"
+        />
+      } @else if (isLoading()) {
+        <app-request-state
+          state="loading"
+          title="Loading outcomes"
+          message="Courses and outcomes are loading. Please wait."
         />
       } @else {
         @if (isConflict()) {
@@ -885,6 +892,7 @@ export class OutcomeListEditorComponent implements OnInit {
   readonly liveMessage = signal('Loading outcomes and courses.');
 
   private applyingEditorValues = false;
+  private loadRevision = 0;
 
   private readonly courseValidator: ValidatorFn = (control: AbstractControl): ValidationErrors | null => {
     const value = control.value;
@@ -991,7 +999,9 @@ export class OutcomeListEditorComponent implements OnInit {
   readonly isLoading = computed(() => {
     const coursesStatus = this.courseRequest().status;
     const outcomesStatus = this.outcomeRequest().status;
-    return !this.hasAttemptedLoad() || coursesStatus === 'loading' || outcomesStatus === 'loading';
+    const coursesAwaitingLoad = !this.coursesLoaded() && coursesStatus !== 'error' && coursesStatus !== 'slow' && coursesStatus !== 'unauthorized';
+    const outcomesAwaitingLoad = !this.outcomesLoaded() && outcomesStatus !== 'error' && outcomesStatus !== 'slow' && outcomesStatus !== 'unauthorized';
+    return !this.hasAttemptedLoad() || coursesStatus === 'loading' || outcomesStatus === 'loading' || coursesAwaitingLoad || outcomesAwaitingLoad;
   });
   readonly isUnauthorized = computed(() =>
     this.courseRequest().status === 'unauthorized' || this.outcomeRequest().status === 'unauthorized'
@@ -1001,6 +1011,11 @@ export class OutcomeListEditorComponent implements OnInit {
     const outcomesFailed = this.outcomeRequest().status === 'error' && !this.outcomesLoaded();
     return coursesFailed || outcomesFailed;
   });
+  readonly isSlow = computed(() =>
+    !this.isUnauthorized() && !this.isServiceError() &&
+    [this.courseRequest(), this.outcomeRequest()].some((request) => request.status === 'slow')
+  );
+  readonly isBusy = computed(() => this.isLoading() || this.isSlow());
   readonly isConflict = computed(() =>
     this.feedbackKind() === 'conflict' || this.outcomeRequest().status === 'conflict'
   );
@@ -1032,27 +1047,34 @@ export class OutcomeListEditorComponent implements OnInit {
   }
 
   loadData(): void {
+    const loadRevision = ++this.loadRevision;
+    this.coursesLoaded.set(false);
+    this.outcomesLoaded.set(false);
     this.hasAttemptedLoad.set(true);
     this.liveMessage.set('Loading outcomes and courses.');
 
     this.facade.loadCourses().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.coursesLoaded.set(true);
         this.refreshDomainValidators();
         this.liveMessage.set('Courses loaded.');
       },
       error: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.liveMessage.set('Courses could not be loaded. Try again.');
       }
     });
 
     this.facade.loadOutcomes(this.outcomeFilter()).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.outcomesLoaded.set(true);
         this.refreshDomainValidators();
         this.liveMessage.set('Outcomes loaded.');
       },
       error: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.liveMessage.set('Outcomes could not be loaded. Try again.');
       }
     });

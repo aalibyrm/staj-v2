@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DEMO_ACCOUNTS, type AuthSession } from '../../../core/auth/authorization';
 import { SessionStore } from '../../../core/auth/session.store';
+import { AuditLogRepository } from '../data-access/audit-log.repository';
 import { AuditLogComponent } from './audit-log.component';
 
 const accountFor = (role: (typeof DEMO_ACCOUNTS)[number]['roleCode']) => DEMO_ACCOUNTS.find((account) => account.roleCode === role)!;
@@ -116,5 +117,50 @@ describe('AuditLogComponent', () => {
     await vi.waitFor(() => {
       expect(element.querySelector('.audit-detail')?.textContent).toContain('Redacted');
     });
+  });
+  it('hides stale table and detail through the shared slow state, then recovers through retry', async () => {
+    configure(sessionFor('PLATFORM_ADMINISTRATOR'));
+    const harness = await RouterTestingHarness.create();
+    const component = await harness.navigateByUrl('/audit-log', AuditLogComponent);
+    await vi.waitFor(() => {
+      expect(component.facade.requestState().status).toBe('ready');
+    });
+    harness.detectChanges();
+    const element = harness.routeNativeElement as HTMLElement;
+    const trigger = element.querySelector<HTMLButtonElement>('.row-select');
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    harness.detectChanges();
+    expect(element.querySelector('.audit-detail')).not.toBeNull();
+    const repository = Reflect.get(component.facade, 'repository');
+    expect(repository).toBeInstanceOf(AuditLogRepository);
+    if (!(repository instanceof AuditLogRepository)) throw new Error('Audit repository provider is unavailable.');
+    vi.useFakeTimers();
+    try {
+      repository.setMockScenario({ latencyMs: 500 });
+      const pending = component.facade.load(component.facade.query()).subscribe({ error: () => undefined });
+      harness.detectChanges();
+      expect(element.querySelector('.audit-table')).toBeNull();
+      expect(element.querySelector('.audit-detail')).toBeNull();
+      vi.advanceTimersByTime(399);
+      harness.detectChanges();
+      expect(element.querySelector('.request-state--loading')).not.toBeNull();
+      vi.advanceTimersByTime(1);
+      harness.detectChanges();
+      expect(element.querySelector('.request-state--slow')).not.toBeNull();
+      const retry = element.querySelector<HTMLButtonElement>('.retry-action');
+      expect(retry).not.toBeNull();
+
+      repository.resetMockScenario();
+      retry!.click();
+      vi.advanceTimersByTime(1);
+      harness.detectChanges();
+      expect(component.facade.requestState().status).toBe('ready');
+      expect(element.querySelectorAll('.audit-table tbody tr').length).toBeGreaterThan(0);
+      pending.unsubscribe();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

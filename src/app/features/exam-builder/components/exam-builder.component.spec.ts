@@ -6,7 +6,7 @@ import { NEVER, of, type Observable } from 'rxjs';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { ExamBuilderFacade, type ExamAutomaticSelectionState } from '../data-access/exam-builder.facade';
 import { compareExamBlueprint, createExamBlueprint, type ExamBlueprintCurrentCoverageInput } from '../models/exam-blueprint.models';
-import type { Exam } from '../models/exam.models';
+import type { Exam, ExamCurrentLoadState } from '../models/exam.models';
 import { asLearningOutcomeId } from '../../question-bank/models/question.models';
 import { BlueprintConstraintEditorComponent } from './blueprint-constraint-editor.component';
 import { ExamBuilderComponent } from './exam-builder.component';
@@ -207,7 +207,7 @@ describe('ExamBuilderComponent', () => {
     expect(fixture.componentInstance.publishSubmissionLocked()).toBe(false);
     expect(document.activeElement).toBe(trigger);
   });
-  it('invokes automatic selection and exposes retry for a retryable state', () => {
+  it('renders automatic selection loading, empty, denial, and service recovery states through the facade', () => {
     const autoState = signal<ExamAutomaticSelectionState>({
       status: 'idle',
       selected: Object.freeze([]),
@@ -215,7 +215,15 @@ describe('ExamBuilderComponent', () => {
       message: 'Ready'
     });
     const automaticSelect = vi.fn(() => of(autoState()));
-    const retryAutoSelection = vi.fn(() => of(autoState()));
+    const retryAutoSelection = vi.fn(() => {
+      autoState.set({
+        status: 'success',
+        selected: Object.freeze([]),
+        unmetReasons: Object.freeze([]),
+        message: 'Recovered'
+      });
+      return of(autoState());
+    });
     const facade = Object.assign(publishExamStub(() => NEVER), {
       autoSelectionState: autoState,
       targetValid: signal(true),
@@ -223,16 +231,64 @@ describe('ExamBuilderComponent', () => {
       retryAutoSelection
     }) as unknown as ExamBuilderFacade;
     const fixture = create(facade);
-    const buttons = Array.from(fixture.nativeElement.querySelectorAll('button') as NodeListOf<HTMLButtonElement>);
-    const automaticButton = buttons.find((button) => button.textContent?.includes('Automatic select')) as HTMLButtonElement;
+    const element = fixture.nativeElement as HTMLElement;
+    const automaticButton = Array.from(element.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('Automatic select')
+    ) as HTMLButtonElement;
 
     automaticButton.click();
     expect(automaticSelect).toHaveBeenCalledTimes(1);
-    autoState.set({ status: 'error', selected: Object.freeze([]), unmetReasons: Object.freeze([]), message: 'Retry', retryable: true });
+
+    autoState.set({
+      status: 'loading',
+      selected: Object.freeze([]),
+      unmetReasons: Object.freeze([]),
+      message: 'Selecting published snapshots.'
+    });
     fixture.detectChanges();
-    const retryButton = (Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[]).find((button) => button.textContent?.trim() === 'Retry') as HTMLButtonElement;
+    expect(element.querySelector('.automatic-selection .summary-status')?.textContent?.trim()).toBe('loading');
+    expect(element.querySelector('.automatic-selection')?.textContent).toContain('Selecting published snapshots.');
+    expect(element.querySelector('.automatic-selection button.secondary-action')).toBeNull();
+
+    autoState.set({
+      status: 'empty',
+      selected: Object.freeze([]),
+      unmetReasons: Object.freeze([]),
+      message: 'No eligible published snapshots.'
+    });
+    fixture.detectChanges();
+    expect(element.querySelector('.automatic-selection')?.textContent).toContain('No eligible published snapshots.');
+    expect(element.querySelector('.automatic-selection button.secondary-action')).toBeNull();
+
+    autoState.set({
+      status: 'unauthorized',
+      selected: Object.freeze([]),
+      unmetReasons: Object.freeze([]),
+      message: 'Question bank access is unavailable.'
+    });
+    fixture.detectChanges();
+    expect(element.querySelector('.automatic-selection')?.textContent).toContain('Question bank access is unavailable.');
+    expect(element.querySelector('.automatic-selection button.secondary-action')).toBeNull();
+
+    autoState.set({
+      status: 'error',
+      selected: Object.freeze([]),
+      unmetReasons: Object.freeze([]),
+      message: 'Question service unavailable. Retry.',
+      retryable: true
+    });
+    fixture.detectChanges();
+    const retryButton = Array.from(element.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Retry'
+    ) as HTMLButtonElement;
+    expect(element.querySelector('.automatic-selection')?.textContent).toContain('Question service unavailable. Retry.');
+    expect(retryButton).not.toBeNull();
     retryButton.click();
+    fixture.detectChanges();
     expect(retryAutoSelection).toHaveBeenCalledTimes(1);
+    expect(element.querySelector('.automatic-selection .summary-status')?.textContent?.trim()).toBe('success');
+    expect(element.querySelector('.automatic-selection')?.textContent).toContain('Recovered');
+    expect(element.querySelector('.automatic-selection')?.textContent).not.toContain('Question service unavailable');
   });
 
   it('requires a nonblank successor reason before calling the facade, but not for drafts', () => {
@@ -269,5 +325,70 @@ describe('ExamBuilderComponent', () => {
     const newLoadCurrent = vi.fn(() => of(undefined as unknown as Exam));
     create(Object.assign(publishExamStub(() => NEVER), { loadCurrent: newLoadCurrent }) as unknown as ExamBuilderFacade);
     expect(newLoadCurrent).not.toHaveBeenCalled();
+  });
+  it('renders a clean new-draft route without calling current-exam load', () => {
+    routeParam.mockReturnValue(null);
+    const facade = publishExamStub(() => NEVER);
+    const currentExam = facade.currentExam as unknown as WritableSignal<Exam | null>;
+    const startNewDraft = vi.fn(() => currentExam.set(null));
+    const loadCurrent = vi.fn(() => NEVER);
+    const currentExamLoadState = signal<ExamCurrentLoadState>({ status: 'idle', message: 'Ready for a new exam draft.' });
+    const fixture = create(Object.assign(facade, { currentExamLoadState, startNewDraft, loadCurrent }) as unknown as ExamBuilderFacade);
+    expect(startNewDraft).toHaveBeenCalledTimes(1);
+    expect(loadCurrent).not.toHaveBeenCalled();
+    expect(facade.currentExam()).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-request-state')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.settings-shell')).not.toBeNull();
+  });
+
+  it('blocks stale editor content during edit loading and slow/error transitions, then retries only service errors', () => {
+    routeParam.mockReturnValue('EXAM-42');
+    const facade = publishExamStub(() => NEVER);
+    const currentExamLoadState = signal<ExamCurrentLoadState>({ status: 'loading', message: 'Loading the current exam.' });
+    const loadCurrent = vi.fn(() => NEVER);
+    const retryLoadCurrent = vi.fn(() => {
+      currentExamLoadState.set({ status: 'success', message: 'Exam loaded successfully.' });
+      return of(undefined as unknown as Exam);
+    });
+    const fixture = create(Object.assign(facade, { currentExamLoadState, loadCurrent, retryLoadCurrent }) as unknown as ExamBuilderFacade);
+    const element = fixture.nativeElement as HTMLElement;
+    expect(loadCurrent).toHaveBeenCalledWith('EXAM-42');
+    expect(element.querySelector('app-request-state')?.textContent).toContain('Loading the current exam.');
+    expect(element.querySelector('.content-grid')).toBeNull();
+    expect(element.querySelector('.settings-shell')).toBeNull();
+    expect(element.querySelector('.automatic-selection')).toBeNull();
+    expect(element.querySelector('.history-shell')).toBeNull();
+    expect(element.querySelector('main')?.getAttribute('aria-busy')).toBe('true');
+    currentExamLoadState.set({ status: 'slow', message: 'The exam is still loading. You can wait or try again.', retryable: true });
+    fixture.detectChanges();
+    expect(element.querySelector('app-request-state')?.textContent).toContain('The exam is still loading.');
+    const retry = element.querySelector('.retry-action') as HTMLButtonElement;
+    expect(retry).not.toBeNull();
+    retry.click();
+    fixture.detectChanges();
+    expect(retryLoadCurrent).toHaveBeenCalledTimes(1);
+    expect(element.querySelector('.content-grid')).not.toBeNull();
+    currentExamLoadState.set({ status: 'error', message: 'The exam cannot be loaded again.', retryable: false });
+    fixture.detectChanges();
+    expect(element.querySelector('.route-load-error')).not.toBeNull();
+    expect(element.querySelector('.retry-action')).toBeNull();
+    expect(element.querySelector('.content-grid')).toBeNull();
+  });
+
+  it('renders unauthorized edit loads without a current-exam retry action', () => {
+    routeParam.mockReturnValue('EXAM-43');
+    const retryLoadCurrent = vi.fn(() => NEVER);
+    const currentExamLoadState = signal<ExamCurrentLoadState>({ status: 'unauthorized', message: 'You do not have permission to view this exam.' });
+    const facade = Object.assign(publishExamStub(() => NEVER), {
+      currentExamLoadState,
+      loadCurrent: vi.fn(() => NEVER),
+      retryLoadCurrent
+    }) as unknown as ExamBuilderFacade;
+    const fixture = create(facade);
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('app-request-state')?.textContent).toContain('You do not have permission');
+    expect(element.querySelector('.retry-action')).toBeNull();
+    expect(element.querySelector('.content-grid')).toBeNull();
+    expect(retryLoadCurrent).not.toHaveBeenCalled();
   });
 });

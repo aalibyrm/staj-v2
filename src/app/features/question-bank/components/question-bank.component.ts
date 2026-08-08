@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, ViewChild, 
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, type ParamMap } from '@angular/router';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
-import { EMPTY, Subject, catchError, debounceTime, distinctUntilChanged, of, switchMap, tap } from 'rxjs';
+import { EMPTY, Subject, catchError, debounceTime, distinctUntilChanged, merge, of, switchMap, tap } from 'rxjs';
 
 import { RequestStateComponent } from '../../../shared/components/request-state.component';
 import {
@@ -31,8 +31,8 @@ import { QuestionEditorComponent } from './question-editor.component';
 interface QueryRequest {
   readonly query: QuestionListQuery;
   readonly selectedId: QuestionId | null;
+  readonly retry?: boolean;
 }
-
 type BulkActionMode = 'add-tags' | 'replace-tags' | 'status';
 type InspectorTab = 'preview' | 'metadata' | 'versions';
 
@@ -126,6 +126,7 @@ const FILTER_DEFAULTS = {
         <section class="table-card" aria-labelledby="question-table-heading">
           <div class="card-heading"><div><span class="eyebrow">Scoped results</span><h2 id="question-table-heading">Questions <span *ngIf="facade.pageResult()">({{ total() }})</span></h2></div><span class="page-summary">Page {{ currentPage() }} of {{ totalPages() || 1 }}</span></div>
           <div *ngIf="facade.requestState().status === 'loading'" class="table-state"><app-request-state state="loading" title="Loading questions" message="The scoped question list is loading." /></div>
+          <div *ngIf="facade.requestState().status === 'slow'" class="table-state"><app-request-state state="slow" title="Question bank response is taking longer" message="The question bank is still loading. You can wait or retry." (retry)="retryLoad()" /></div>
           <div *ngIf="facade.requestState().status === 'unauthorized'" class="table-state"><app-request-state state="unauthorized" title="Question bank unavailable" message="A valid instructor or measurement course grant is required." /></div>
           <div *ngIf="facade.requestState().status === 'error'" class="table-state"><app-request-state state="error" title="Question service unavailable" [message]="facade.errorMessage()" (retry)="retryLoad()" /></div>
           <div *ngIf="facade.requestState().status === 'empty'" class="table-state"><app-request-state state="empty" title="No matching questions" message="No authorized question matches the current filters." /></div>
@@ -153,7 +154,7 @@ const FILTER_DEFAULTS = {
           </nav>
         </section>
 
-        <aside class="inspector" [class.inspector--open]="facade.selectedQuestion() !== null" aria-labelledby="question-inspector-heading" [attr.aria-hidden]="facade.selectedQuestion() === null ? 'true' : null">
+        <aside *ngIf="facade.requestState().status === 'success'" class="inspector" [class.inspector--open]="facade.selectedQuestion() !== null" aria-labelledby="question-inspector-heading" [attr.aria-hidden]="facade.selectedQuestion() === null ? 'true' : null">
           <div class="inspector-heading"><div><span class="eyebrow">Current entity</span><h2 id="question-inspector-heading">Inspector</h2></div><button *ngIf="facade.selectedQuestion()" type="button" class="icon-button" aria-label="Close question inspector" (click)="clearSelection()">×</button></div>
           <ng-container *ngIf="facade.selectedQuestion() as selected; else noSelection">
             <div class="inspector-id"><strong>{{ selected.id }}</strong><span class="table-badge status-badge"><span aria-hidden="true">{{ statusIcon(selected.status) }}</span> {{ statusLabel(selected.status) }}</span></div>
@@ -221,7 +222,7 @@ const FILTER_DEFAULTS = {
           </ng-container>
           <ng-template #noSelection><div class="inspector-empty"><span aria-hidden="true">⌁</span><h3>Select a question</h3><p>Choose one row to preview its current content and metadata.</p></div></ng-template>
         </aside>
-        <button *ngIf="facade.selectedQuestion()" type="button" class="inspector-backdrop" aria-label="Close question inspector" (click)="clearSelection()"></button>
+        <button *ngIf="facade.requestState().status === 'success' && facade.selectedQuestion()" type="button" class="inspector-backdrop" aria-label="Close question inspector" (click)="clearSelection()"></button>
       </div>
     </section>
   `,
@@ -351,6 +352,7 @@ export class QuestionBankComponent implements OnInit {
     return this.questions().some((question) => selected.has(question.id)) && !this.allCurrentPageSelected();
   });
   private readonly queryRequests = new Subject<QueryRequest>();
+  private readonly retryRequests = new Subject<QueryRequest>();
   private readonly selectionRequests = new Subject<QuestionId | null>();
   private lastQueryKey = '';
   private lastSelectedKey = '';
@@ -406,19 +408,28 @@ export class QuestionBankComponent implements OnInit {
   });
 
   ngOnInit(): void {
-    this.queryRequests.pipe(
-      distinctUntilChanged((left, right) => this.queryKey(left.query) === this.queryKey(right.query) && left.selectedId === right.selectedId),
+    merge(this.queryRequests, this.retryRequests).pipe(
+      distinctUntilChanged((left, right) =>
+        right.retry !== true &&
+        this.queryKey(left.query) === this.queryKey(right.query) &&
+        left.selectedId === right.selectedId
+      ),
       tap(({ query }) => this.activeQuerySignal.set(query)),
-      switchMap(({ query, selectedId }) => this.facade.loadQuestions(query).pipe(
-        tap((response) => {
-          this.activeQuerySignal.set(response.query);
-          this.filterForm.patchValue({ sort: response.query.sort }, { emitEvent: false });
-          if (response.query.page !== query.page) this.syncUrl(response.query, selectedId);
-          this.liveMessage.set(`${response.total} authorized questions loaded.`);
-        }),
-        switchMap(() => selectedId === null ? of(null) : this.facade.selectQuestion(selectedId)),
-        catchError(() => EMPTY)
-      )),
+      switchMap(({ query, selectedId, retry }) => {
+        const request$ = retry === true
+          ? this.facade.retry()
+          : this.facade.loadQuestions(query);
+        return request$.pipe(
+          tap((response) => {
+            this.activeQuerySignal.set(response.query);
+            this.filterForm.patchValue({ sort: response.query.sort }, { emitEvent: false });
+            if (response.query.page !== query.page) this.syncUrl(response.query, selectedId);
+            this.liveMessage.set(`${response.total} authorized questions loaded.`);
+          }),
+          switchMap(() => selectedId === null ? of(null) : this.facade.selectQuestion(selectedId)),
+          catchError(() => EMPTY)
+        );
+      }),
       takeUntilDestroyed(this.destroyRef)
     ).subscribe((selected) => {
       if (selected === null && this.selectedRouteIdSignal() !== null) {
@@ -454,7 +465,13 @@ export class QuestionBankComponent implements OnInit {
     this.facade.loadCourseOptions().pipe(catchError(() => EMPTY), takeUntilDestroyed(this.destroyRef)).subscribe();
   }
 
-  retryLoad(): void { this.queryRequests.next({ query: this.activeQuerySignal(), selectedId: this.selectedRouteIdSignal() }); }
+  retryLoad(): void {
+    this.retryRequests.next({
+      query: this.activeQuerySignal(),
+      selectedId: this.selectedRouteIdSignal(),
+      retry: true
+    });
+  }
 
   resetFilters(): void { this.filterForm.reset(FILTER_DEFAULTS); }
 

@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { firstValueFrom } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { firstValueFrom, Subject } from 'rxjs';
+import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest';
 
 import { MockTransport } from '../../../core/api/mock-transport';
 import {
@@ -8,7 +8,7 @@ import {
 } from '../data-access/learning-domain.facade';
 import { LearningDomainRepository } from '../data-access/learning-domain.repository';
 import { LearningDomainStore } from './learning-domain.store';
-import type { Course, CourseId } from '../models/learning-domain.models';
+import type { Course, CourseId, LearningOutcome } from '../models/learning-domain.models';
 
 const course = (id: string, title: string, status: Course['status'] = 'published'): Course =>
   Object.freeze({
@@ -44,6 +44,21 @@ describe('LearningDomainStore', () => {
     expect(store.state().courses.ids).toEqual(['course-b']);
     expect(store.state().courses.entities['course-a']).toBeUndefined();
   });
+  it('marks only the current loading request as slow', () => {
+    const store = new LearningDomainStore();
+
+    store.beginRequest('courses', 1);
+    expect(store.markRequestSlow('courses', 1)).toBe(true);
+    expect(store.coursesRequestState().status).toBe('slow');
+    expect(store.markRequestSlow('courses', 1)).toBe(false);
+
+    expect(store.completeRequest('courses', 1, 1)).toBe(true);
+    expect(store.markRequestSlow('courses', 1)).toBe(false);
+    store.beginRequest('courses', 2);
+    expect(store.markRequestSlow('courses', 1)).toBe(false);
+    expect(store.coursesRequestState().status).toBe('loading');
+  });
+
 
   it('filters and sorts through memoized selectors without storing derived arrays', () => {
     const store = new LearningDomainStore();
@@ -91,4 +106,109 @@ describe('LearningDomainStore', () => {
     const facade = TestBed.inject(LearningDomainFacade);
     expect(facade.state().courses.ids).toEqual([]);
   });
+  describe('LearningDomainFacade slow request lifecycle', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('transitions loading to slow and preserves terminal read semantics', () => {
+      const repository = new LearningDomainRepository(new MockTransport());
+      const facade = new LearningDomainFacade(repository, new LearningDomainStore());
+
+      const success = facade.loadCourses({}, { latencyMs: 1000 }).subscribe();
+      expect(facade.coursesRequestState().status).toBe('loading');
+      vi.advanceTimersByTime(400);
+      expect(facade.coursesRequestState().status).toBe('slow');
+      vi.advanceTimersByTime(600);
+      expect(facade.coursesRequestState().status).toBe('success');
+      expect(vi.getTimerCount()).toBe(0);
+      success.unsubscribe();
+
+      const empty = facade.loadCourses({ search: 'does-not-exist' }, { latencyMs: 1000 }).subscribe();
+      vi.advanceTimersByTime(400);
+      expect(facade.coursesRequestState().status).toBe('slow');
+      vi.advanceTimersByTime(600);
+      expect(facade.coursesRequestState().status).toBe('empty');
+      empty.unsubscribe();
+
+      const error = facade
+        .loadCourses({}, { latencyMs: 1000, outcome: 'service-error' })
+        .subscribe({ error: () => undefined });
+      vi.advanceTimersByTime(400);
+      expect(facade.coursesRequestState().status).toBe('slow');
+      vi.advanceTimersByTime(600);
+      expect(facade.coursesRequestState().status).toBe('error');
+
+      const unauthorized = facade
+        .loadCourses({}, { latencyMs: 1000, outcome: 'unauthorized' })
+        .subscribe({ error: () => undefined });
+      vi.advanceTimersByTime(400);
+      expect(facade.coursesRequestState().status).toBe('slow');
+      vi.advanceTimersByTime(600);
+      expect(facade.coursesRequestState().status).toBe('unauthorized');
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('clears superseded, cancelled, and destroyed timers without stale completion', () => {
+      const repository = new LearningDomainRepository(new MockTransport());
+      const facade = new LearningDomainFacade(repository, new LearningDomainStore());
+      const first$ = new Subject<readonly Course[]>();
+      const second$ = new Subject<readonly Course[]>();
+      const pending$ = new Subject<readonly Course[]>();
+      vi.spyOn(repository, 'listCourses')
+        .mockReturnValueOnce(first$.asObservable())
+        .mockReturnValueOnce(second$.asObservable())
+        .mockReturnValue(pending$.asObservable());
+
+      const first = facade.loadCourses().subscribe();
+      expect(vi.getTimerCount()).toBe(1);
+      const second = facade.loadCourses().subscribe();
+      expect(vi.getTimerCount()).toBe(1);
+      first$.next([course('stale', 'Stale')]);
+      expect(facade.coursesRequestState().status).toBe('loading');
+      vi.advanceTimersByTime(400);
+      expect(facade.coursesRequestState().status).toBe('slow');
+      first.unsubscribe();
+
+      second$.next([]);
+      expect(facade.coursesRequestState().status).toBe('empty');
+      expect(vi.getTimerCount()).toBe(0);
+      second.unsubscribe();
+
+      const pending = facade.loadCourses().subscribe();
+      expect(vi.getTimerCount()).toBe(1);
+      facade.ngOnDestroy();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(400);
+      expect(facade.coursesRequestState().status).toBe('loading');
+      pending.unsubscribe();
+    });
+
+    it('keeps slow timers independent across resources', () => {
+      const repository = new LearningDomainRepository(new MockTransport());
+      const facade = new LearningDomainFacade(repository, new LearningDomainStore());
+      const courses$ = new Subject<readonly Course[]>();
+      const outcomes$ = new Subject<readonly LearningOutcome[]>();
+      vi.spyOn(repository, 'listCourses').mockReturnValue(courses$.asObservable());
+      vi.spyOn(repository, 'listOutcomes').mockReturnValue(outcomes$.asObservable());
+
+      const courses = facade.loadCourses().subscribe();
+      const outcomes = facade.loadOutcomes().subscribe();
+      vi.advanceTimersByTime(399);
+      expect(facade.coursesRequestState().status).toBe('loading');
+      expect(facade.outcomesRequestState().status).toBe('loading');
+      vi.advanceTimersByTime(1);
+      expect(facade.coursesRequestState().status).toBe('slow');
+      expect(facade.outcomesRequestState().status).toBe('slow');
+
+      courses$.next([]);
+      expect(facade.coursesRequestState().status).toBe('empty');
+      expect(facade.outcomesRequestState().status).toBe('slow');
+      outcomes$.next([]);
+      expect(facade.outcomesRequestState().status).toBe('empty');
+      expect(vi.getTimerCount()).toBe(0);
+      courses.unsubscribe();
+      outcomes.unsubscribe();
+    });
+  });
+
 });

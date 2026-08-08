@@ -24,7 +24,7 @@ const item: ContentItem = {
 };
 
 const accountIdFor = (role: RoleCode): string => DEMO_ACCOUNTS.find((account) => account.roleCode === role)?.id ?? '';
-const requestState = (status: 'idle' | 'loading' | 'success' | 'error' | 'unauthorized') => ({ status, requestId: 1, error: status === 'error' ? new Error('service') : null });
+const requestState = (status: 'idle' | 'loading' | 'slow' | 'success' | 'error' | 'unauthorized' | 'empty') => ({ status, requestId: 1, error: status === 'error' ? new Error('service') : null });
 const queryMap = (values: Record<string, string>): { get: (name: string) => string | null } => ({ get: (name) => values[name] ?? null });
 
 class TestFacade {
@@ -116,6 +116,7 @@ describe('CourseContentCatalogComponent', () => {
   it('preserves filters for retry and distinguishes empty access from filter mismatch', () => {
     const fixture = create('STUDENT');
     facade.content.set([]);
+    facade.contentRequestState.set(requestState('empty'));
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('No accessible content');
     fixture.componentInstance.filterForm.controls.search.setValue('missing');
@@ -158,5 +159,65 @@ describe('CourseContentCatalogComponent', () => {
     vi.advanceTimersByTime(250);
     expect(stale.observers).toHaveLength(0);
     expect(facade.loadContent).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'second' }), expect.anything());
+  });
+  it('renders the shared slow state, hides stale rows, and wires Retry to retryLoad', () => {
+    const fixture = create('STUDENT');
+    const callsBeforeRetry = facade.loadContent.mock.calls.length;
+    facade.contentRequestState.set(requestState('slow'));
+    fixture.detectChanges();
+
+    const state = fixture.nativeElement.querySelector('app-request-state');
+    expect(state).not.toBeNull();
+    expect(state?.querySelector('.request-state--slow')).not.toBeNull();
+    expect(state?.textContent).toContain('Course catalog is taking longer than expected');
+    expect(state?.textContent).toContain('Courses, outcomes, or content are still loading.');
+    expect(state?.querySelector('button')?.textContent?.trim()).toBe('Try again');
+    expect(fixture.nativeElement.querySelector('tbody')).toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain(item.title);
+    expect(fixture.nativeElement.querySelector('main')?.getAttribute('aria-busy')).toBe('true');
+
+    (state?.querySelector('button') as HTMLButtonElement | null)?.click();
+    vi.advanceTimersByTime(250);
+    fixture.detectChanges();
+    expect(facade.loadContent.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+  });
+
+  it('keeps loading as a skeleton and hides stale rows instead of rendering the slow state', () => {
+    const fixture = create('STUDENT');
+    facade.contentRequestState.set(requestState('loading'));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.skeleton-grid')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-request-state')).toBeNull();
+    expect(fixture.nativeElement.querySelector('tbody')).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Loading courses, outcomes, and content.');
+    expect(fixture.nativeElement.textContent).not.toContain(item.title);
+    expect(fixture.nativeElement.querySelector('main')?.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('preserves service retry and unauthorized precedence without exposing stale rows', () => {
+    const fixture = create('STUDENT');
+    facade.coursesRequestState.set(requestState('slow'));
+    facade.contentRequestState.set(requestState('error'));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.state-card--error')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-request-state')).toBeNull();
+    expect(fixture.nativeElement.querySelector('tbody')).toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain(item.title);
+    const callsBeforeRetry = facade.loadContent.mock.calls.length;
+    (fixture.nativeElement.querySelector('.state-card--error button') as HTMLButtonElement | null)?.click();
+    vi.advanceTimersByTime(250);
+    fixture.detectChanges();
+    expect(facade.loadContent.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+
+    facade.coursesRequestState.set(requestState('unauthorized'));
+    facade.contentRequestState.set(requestState('error'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Catalog access unavailable');
+    expect(fixture.nativeElement.querySelector('.state-card--error')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-request-state')).toBeNull();
+    expect(fixture.nativeElement.querySelector('tbody')).toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain(item.title);
   });
 });

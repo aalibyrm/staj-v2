@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
-import { BehaviorSubject, of, throwError } from 'rxjs';
+import { BehaviorSubject, of, Subject, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -92,6 +92,7 @@ const requestState = (status: LearningDomainRequestState['status']): LearningDom
   requestId: 1,
   error: status === 'error' ? new Error('Service unavailable') : null
 });
+type FailureMode = 'none' | 'error' | 'unauthorized';
 
 class TestFacade {
   readonly courses = signal<readonly Course[]>([course]);
@@ -104,9 +105,43 @@ class TestFacade {
   readonly outcomesRequestState = signal(requestState('idle'));
   readonly contentRequestState = signal(requestState('idle'));
   readonly visibleOutcomes = signal<readonly LearningOutcome[]>([first, second]);
-  readonly loadCourses = vi.fn(() => { this.requestStates.update((value) => ({ ...value, courses: requestState('success') })); return of([course]); });
-  readonly loadOutcomes = vi.fn(() => { this.requestStates.update((value) => ({ ...value, outcomes: requestState('success') })); return of([first, second]); });
-  readonly loadContent = vi.fn(() => { this.requestStates.update((value) => ({ ...value, content: requestState('success') })); return of([content]); });
+  failureMode: FailureMode = 'none';
+  readonly loadCourses = vi.fn(() => {
+    if (this.failureMode === 'error') {
+      this.requestStates.update((value) => ({ ...value, courses: requestState('error') }));
+      return throwError(() => new Error('Service unavailable'));
+    }
+    if (this.failureMode === 'unauthorized') {
+      this.requestStates.update((value) => ({ ...value, courses: requestState('unauthorized') }));
+      return throwError(() => new Error('Unauthorized'));
+    }
+    this.requestStates.update((value) => ({ ...value, courses: requestState('success') }));
+    return of([course]);
+  });
+  readonly loadOutcomes = vi.fn(() => {
+    if (this.failureMode === 'error') {
+      this.requestStates.update((value) => ({ ...value, outcomes: requestState('error') }));
+      return throwError(() => new Error('Service unavailable'));
+    }
+    if (this.failureMode === 'unauthorized') {
+      this.requestStates.update((value) => ({ ...value, outcomes: requestState('unauthorized') }));
+      return throwError(() => new Error('Unauthorized'));
+    }
+    this.requestStates.update((value) => ({ ...value, outcomes: requestState('success') }));
+    return of([first, second]);
+  });
+  readonly loadContent = vi.fn(() => {
+    if (this.failureMode === 'error') {
+      this.requestStates.update((value) => ({ ...value, content: requestState('error') }));
+      return throwError(() => new Error('Service unavailable'));
+    }
+    if (this.failureMode === 'unauthorized') {
+      this.requestStates.update((value) => ({ ...value, content: requestState('unauthorized') }));
+      return throwError(() => new Error('Unauthorized'));
+    }
+    this.requestStates.update((value) => ({ ...value, content: requestState('success') }));
+    return of([content]);
+  });
   readonly recommendLearningPath = vi.fn((_input: LearningPathRecommendationInput): readonly LearningPathEntry[] => []);
   readonly setOutcomeFilter = vi.fn();
   readonly updateOutcome = vi.fn((id: LearningOutcomeId, input: { prerequisiteOutcomeIds?: readonly LearningOutcomeId[] }, options?: { expectedVersion?: number }) => {
@@ -181,6 +216,124 @@ describe('OutcomeGraphComponent', () => {
     expect(fixture.nativeElement.querySelector('table')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('#outcome-map-mastery')?.disabled).toBe(true);
   });
+  it('renders the shared slow state, hides stale graph data, and retries loading', () => {
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    fixture.detectChanges();
+    const callsBeforeRetry = facade.loadContent.mock.calls.length;
+    facade.requestStates.update((value) => ({ ...value, outcomes: requestState('slow') }));
+    fixture.detectChanges();
+
+    const state = fixture.nativeElement.querySelector('app-request-state');
+    expect(state?.querySelector('.request-state--slow')).not.toBeNull();
+    expect(state?.textContent).toContain('Outcome map is taking longer than expected');
+    expect(state?.textContent).toContain('related content are still loading');
+    expect(state?.querySelector('.retry-action')?.textContent?.trim()).toBe('Try again');
+    expect(fixture.nativeElement.querySelector('.map-layout')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.graph-canvas')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.accessible-list')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.inspector-panel')).toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain('Describe matter');
+    expect(fixture.nativeElement.querySelector('.outcome-map')?.getAttribute('aria-busy')).toBe('true');
+
+    (state?.querySelector('.retry-action') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(facade.loadContent.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+  });
+
+  it('keeps loading distinct from slow and hides all stale map alternatives', () => {
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    fixture.detectChanges();
+    facade.requestStates.update((value) => ({ ...value, courses: requestState('loading') }));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('app-request-state')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.state-card[aria-busy="true"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.map-layout')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.accessible-list')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.outcome-map')?.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('renders authorized empty map state without stale alternatives', () => {
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    fixture.detectChanges();
+    facade.outcomes.set([]);
+    facade.requestStates.update((value) => ({ ...value, outcomes: requestState('empty') }));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.state-card--empty')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.map-layout')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.accessible-list')).toBeNull();
+  });
+
+  it('renders service load error retry and keeps unauthorized precedence over error', () => {
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    const callsBeforeRetry = facade.loadContent.mock.calls.length;
+    facade.failureMode = 'error';
+    component.loadData();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.state-card--error')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-request-state')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.map-layout')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.accessible-list')).toBeNull();
+
+    facade.failureMode = 'none';
+    (fixture.nativeElement.querySelector('.state-card--error button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(facade.loadContent.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+
+    facade.requestStates.update((value) => ({ ...value, courses: requestState('unauthorized'), outcomes: requestState('error') }));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.state-card--denied')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.state-card--error')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.map-layout')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.accessible-list')).toBeNull();
+  });
+  it('ignores superseded graph-load callbacks after a newer error', () => {
+    const fixture = TestBed.createComponent(OutcomeGraphComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    component.selectOutcome(secondId);
+
+    const staleCourses = new Subject<Course[]>();
+    const staleOutcomes = new Subject<LearningOutcome[]>();
+    const staleContent = new Subject<ContentItem[]>();
+    facade.loadCourses
+      .mockImplementationOnce(() => staleCourses)
+      .mockImplementationOnce(() => throwError(() => new Error('Latest courses failed')));
+    facade.loadOutcomes
+      .mockImplementationOnce(() => staleOutcomes)
+      .mockImplementationOnce(() => throwError(() => new Error('Latest outcomes failed')));
+    facade.loadContent
+      .mockImplementationOnce(() => staleContent)
+      .mockImplementationOnce(() => throwError(() => new Error('Latest content failed')));
+
+    component.loadData();
+    component.loadData();
+    facade.requestStates.update((value) => ({
+      ...value,
+      courses: requestState('error'),
+      outcomes: requestState('error'),
+      content: requestState('error')
+    }));
+    facade.outcomes.set([first]);
+
+    staleCourses.next([course]);
+    staleCourses.complete();
+    staleOutcomes.next([first, second]);
+    staleOutcomes.error(new Error('Old outcomes failed'));
+    staleContent.next([content]);
+    staleContent.complete();
+
+    expect(component.coursesLoaded()).toBe(false);
+    expect(component.outcomesLoaded()).toBe(false);
+    expect(component.contentLoaded()).toBe(false);
+    expect(component.selectedOutcomeId()).toBe(secondId);
+    expect(component.liveMessage()).toBe('Content could not be loaded. Try again.');
+  });
+
   it('keeps default filters query-free on initialization', () => {
     const fixture = TestBed.createComponent(OutcomeGraphComponent);
     const component = fixture.componentInstance;

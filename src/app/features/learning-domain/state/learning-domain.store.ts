@@ -28,6 +28,7 @@ export type LearningDomainResource = 'courses' | 'outcomes' | 'content' | 'paths
 export type LearningDomainRequestStatus =
   | 'idle'
   | 'loading'
+  | 'slow'
   | 'success'
   | 'empty'
   | 'error'
@@ -635,6 +636,15 @@ export class LearningDomainStore {
       error: null
     });
   }
+  markRequestSlow(resource: LearningDomainResource, requestId: number): boolean {
+    const previous = this.state().requests[resource];
+    if (previous.requestId !== requestId || previous.status !== 'loading') {
+      return false;
+    }
+    this.setRequest(resource, { status: 'slow', requestId, error: null });
+    return true;
+  }
+
 
   completeRequest(resource: LearningDomainResource, requestId: number, itemCount: number): boolean {
     const previous = this.state().requests[resource];
@@ -650,7 +660,7 @@ export class LearningDomainStore {
     resource: LearningDomainResource,
     requestId: number,
     error: unknown,
-    status: Exclude<LearningDomainRequestStatus, 'idle' | 'loading' | 'success' | 'empty'> = 'error',
+    status: Exclude<LearningDomainRequestStatus, 'idle' | 'loading' | 'slow' | 'success' | 'empty'> = 'error',
     errorCode?: LearningDomainErrorCode
   ): boolean {
     const previous = this.state().requests[resource];

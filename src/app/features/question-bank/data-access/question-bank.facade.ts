@@ -1,6 +1,6 @@
-import { Injectable, Optional, computed, signal, type Signal } from '@angular/core';
+import { Injectable, Optional, OnDestroy, computed, signal, type Signal } from '@angular/core';
 import { defer, of, throwError, type Observable } from 'rxjs';
-import { catchError, map, switchMap, tap } from 'rxjs/operators';
+import { catchError, finalize, map, switchMap, tap } from 'rxjs/operators';
 
 import { AuditPort, type AuditEventDraft } from '../../../core/observability/observability.ports';
 import { ApiTransportError, normalizeApplicationError } from '../../../core/api/api-error';
@@ -1766,7 +1766,7 @@ export class QuestionBankRepository {
 }
 
 @Injectable({ providedIn: 'root' })
-export class QuestionBankFacade {
+export class QuestionBankFacade implements OnDestroy {
   private readonly repository: QuestionBankRepository;
   private readonly sessionStore: SessionStore;
   private readonly writableRequestState = signal<QuestionBankRequestState>({ status: 'idle' });
@@ -1781,7 +1781,8 @@ export class QuestionBankFacade {
   private readonly writableBulkResult = signal<QuestionBulkResult | null>(null);
   private readonly writableVersionHistory = signal<readonly QuestionVersion[]>([]);
   private lastQuery: QuestionListQuery = normalizeQuestionListQuery();
-
+  private requestRevision = 0;
+  private slowTimer: number | null = null;
   readonly requestState: Signal<QuestionBankRequestState> = this.writableRequestState.asReadonly();
   readonly pageResult: Signal<QuestionListResponse | null> = this.writablePageResult.asReadonly();
   readonly result: Signal<QuestionListResponse | null> = this.pageResult;
@@ -1824,15 +1825,32 @@ export class QuestionBankFacade {
     options: QuestionBankRequestOptions = {}
   ): Observable<QuestionListResponse> {
     const query = normalizeQuestionListQuery(input);
+    const revision = ++this.requestRevision;
+    this.cancelSlowTimer();
     this.lastQuery = query;
     this.writableRequestState.set({ status: 'loading' });
     this.writablePageResult.set(null);
     this.clearSelection('');
+    this.slowTimer = setTimeout(() => {
+      if (revision !== this.requestRevision || this.writableRequestState().status !== 'loading') {
+        return;
+      }
+      this.slowTimer = null;
+      this.writableRequestState.set({
+        status: 'slow',
+        message: 'The question bank is still loading. You can wait or retry.',
+        retryable: true
+      });
+    }, 400) as unknown as number;
     return defer(() => this.repository.listQuestions(query, {
       ...this.sessionOptions(),
       ...options
     })).pipe(
       tap((response) => {
+        if (revision !== this.requestRevision) {
+          return;
+        }
+        this.cancelSlowTimer();
         this.lastQuery = response.query;
         this.writablePageResult.set(response);
         this.writableRequestState.set({
@@ -1840,16 +1858,24 @@ export class QuestionBankFacade {
         });
       }),
       catchError((error: unknown) => {
-        const normalized = normalizeApplicationError(error);
-        const status = error instanceof QuestionBankError && error.code === 'unauthorized'
-          ? 'unauthorized'
-          : normalized.kind === 'unauthorized' ? 'unauthorized' : 'error';
-        this.writablePageResult.set(null);
-        this.writableRequestState.set({
-          status,
-          message: error instanceof QuestionBankError ? error.message : normalized.userMessage
-        });
+        if (revision === this.requestRevision) {
+          this.cancelSlowTimer();
+          const normalized = normalizeApplicationError(error);
+          const unauthorized = error instanceof QuestionBankError && error.code === 'unauthorized' ||
+            normalized.kind === 'unauthorized';
+          this.writablePageResult.set(null);
+          this.writableRequestState.set({
+            status: unauthorized ? 'unauthorized' : 'error',
+            message: error instanceof QuestionBankError ? error.message : normalized.userMessage,
+            retryable: unauthorized ? false : normalized.retryable
+          });
+        }
         return throwError(() => error);
+      }),
+      finalize(() => {
+        if (revision === this.requestRevision) {
+          this.cancelSlowTimer();
+        }
       })
     );
   }
@@ -1860,6 +1886,11 @@ export class QuestionBankFacade {
 
   retry(options: QuestionBankRequestOptions = {}): Observable<QuestionListResponse> {
     return this.loadQuestions(this.lastQuery, options);
+  }
+
+  ngOnDestroy(): void {
+    this.requestRevision += 1;
+    this.cancelSlowTimer();
   }
 
   selectQuestion(
@@ -2181,6 +2212,13 @@ export class QuestionBankFacade {
       (query.grade.length === 0 || question.grade === query.grade) &&
       (query.difficulty.length === 0 || question.difficulty === query.difficulty) &&
       (query.type.length === 0 || question.type === query.type);
+  }
+
+  private cancelSlowTimer(): void {
+    if (this.slowTimer !== null) {
+      clearTimeout(this.slowTimer);
+      this.slowTimer = null;
+    }
   }
 
   private sessionOptions(): QuestionBankRequestOptions {

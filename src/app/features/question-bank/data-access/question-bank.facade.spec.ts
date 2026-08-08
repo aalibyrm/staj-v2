@@ -1,5 +1,5 @@
 import { firstValueFrom } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { MockTransport } from '../../../core/api/mock-transport';
 import { AuditPort } from '../../../core/observability/observability.ports';
@@ -39,6 +39,69 @@ describe('normalizeQuestionListQuery enum filters', () => {
     expect(normalizeQuestionListQuery({ difficulty: 'invalid-difficulty' }).difficulty).toBe('');
     expect(normalizeQuestionListQuery({ status: 'invalid-status' }).status).toBe('');
     expect(normalizeQuestionListQuery({ type: 'invalid-type' }).type).toBe('');
+  });
+});
+
+describe('QuestionBankFacade request lifecycle', () => {
+  it('marks a pending request slow, retries the unchanged query, and recovers', async () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new QuestionBankRepository(new MockTransport());
+      const facade = new QuestionBankFacade(repository, signedIn('INSTRUCTOR'));
+      repository.setMockScenario({ latencyMs: 500 });
+      const firstSubscription = facade.loadQuestions({ search: 'foundations' }).subscribe({ error: () => undefined });
+      vi.advanceTimersByTime(400);
+      expect(facade.requestState()).toMatchObject({
+        status: 'slow',
+        retryable: true
+      });
+      firstSubscription.unsubscribe();
+      repository.setMockScenario({ latencyMs: 0 });
+      const retry = firstValueFrom(facade.retry());
+      vi.runAllTimers();
+      await retry;
+      expect(facade.requestState().status).toBe('success');
+      expect(facade.pageResult()?.query.search).toBe('foundations');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears slow on terminal states and prevents destruction from leaking a transition', async () => {
+    vi.useFakeTimers();
+    try {
+      const settle = async (
+        role: 'INSTRUCTOR' | 'STUDENT',
+        input: { readonly search: string },
+        outcome: 'success' | 'service-error',
+        expected: 'empty' | 'error' | 'unauthorized'
+      ): Promise<void> => {
+        const repository = new QuestionBankRepository(new MockTransport());
+        const facade = new QuestionBankFacade(repository, signedIn(role));
+        repository.setMockScenario({ latencyMs: 500, outcome });
+        const request = firstValueFrom(facade.loadQuestions(input)).catch(() => undefined);
+        vi.advanceTimersByTime(400);
+        expect(facade.requestState().status).toBe('slow');
+        vi.runAllTimers();
+        await request;
+        expect(facade.requestState().status).toBe(expected);
+      };
+      await settle('INSTRUCTOR', { search: 'no-such-question' }, 'success', 'empty');
+      await settle('INSTRUCTOR', { search: '' }, 'service-error', 'error');
+      await settle('STUDENT', { search: '' }, 'success', 'unauthorized');
+
+      const repository = new QuestionBankRepository(new MockTransport());
+      const facade = new QuestionBankFacade(repository, signedIn('INSTRUCTOR'));
+      repository.setMockScenario({ latencyMs: 500 });
+      const subscription = facade.loadQuestions().subscribe({ error: () => undefined });
+      vi.advanceTimersByTime(399);
+      facade.ngOnDestroy();
+      vi.advanceTimersByTime(1);
+      expect(facade.requestState().status).toBe('loading');
+      subscription.unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

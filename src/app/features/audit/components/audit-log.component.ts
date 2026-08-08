@@ -32,6 +32,7 @@ const buildDateFilterOptions = (records: readonly AuditLogRecord[]): ListFilterO
 
 const REQUEST_STATE_MAP: Readonly<Record<string, RequestStateKind>> = Object.freeze({
   loading: 'loading',
+  slow: 'slow',
   empty: 'empty',
   error: 'error',
   unauthorized: 'unauthorized'
@@ -62,7 +63,7 @@ const REQUEST_STATE_MAP: Readonly<Record<string, RequestStateKind>> = Object.fre
       <app-list-query-controls [filterOptions]="filterOptions()" [sortOptions]="sortOptions" />
 
       @if (requestKind(); as kind) {
-        <app-request-state [state]="kind" [message]="facade.requestState().message" (retry)="retry()" />
+        <app-request-state [state]="kind" [title]="requestTitle()" [message]="facade.requestState().message" (retry)="retry()" />
       } @else {
         <section class="summary-card" aria-labelledby="audit-summary-heading">
           <h2 id="audit-summary-heading">Activity summary</h2>
@@ -146,7 +147,22 @@ export class AuditLogComponent {
   private lastTrigger: HTMLElement | null = null;
   private loaded = false;
 
-  readonly requestKind = computed<RequestStateKind | null>(() => REQUEST_STATE_MAP[this.facade.requestState().status] ?? null);
+  readonly requestKind = computed<RequestStateKind | null>(() => {
+    const state = this.facade.requestState();
+    if (state.status === 'error' && state.retryable !== true) return 'unauthorized';
+    return REQUEST_STATE_MAP[state.status] ?? null;
+  });
+
+  readonly requestTitle = computed(() => {
+    switch (this.facade.requestState().status) {
+      case 'loading': return 'Loading audit log';
+      case 'slow': return 'Audit log is taking longer';
+      case 'empty': return 'No audit records found';
+      case 'error': return 'Unable to load audit log';
+      case 'unauthorized': return 'Audit log access unavailable';
+      default: return undefined;
+    }
+  });
 
   readonly filterOptions = computed<readonly ListFilterOption[]>(() => {
     const records = this.facade.records();
@@ -190,7 +206,10 @@ export class AuditLogComponent {
       .subscribe((query) => {
         if (!this.loaded) {
           this.loaded = true;
-          this.facade.load(query).pipe(catchError(() => EMPTY)).subscribe();
+          this.facade.load(query).pipe(
+            catchError(() => EMPTY),
+            takeUntilDestroyed(this.destroyRef)
+          ).subscribe();
           return;
         }
         this.facade.applyQuery(query);
@@ -206,7 +225,12 @@ export class AuditLogComponent {
   }
 
   retry(): void {
-    this.facade.retry().pipe(catchError(() => EMPTY)).subscribe();
+    const state = this.facade.requestState();
+    if (state.status !== 'slow' && !(state.status === 'error' && state.retryable === true)) return;
+    this.facade.retry().pipe(
+      catchError(() => EMPTY),
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe();
   }
 
   clearFilters(): void {

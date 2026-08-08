@@ -126,6 +126,20 @@ export type ExamWorkflowRequestState = Readonly<{
   readonly status: ExamWorkflowRequestStatus;
   readonly message?: string;
 }>;
+export type ExamCurrentLoadStatus =
+  | 'idle'
+  | 'loading'
+  | 'slow'
+  | 'success'
+  | 'error'
+  | 'unauthorized';
+
+export type ExamCurrentLoadState = Readonly<{
+  readonly status: ExamCurrentLoadStatus;
+  readonly message?: string;
+  readonly retryable?: boolean;
+}>;
+
 
 export type ExamWorkflowValidationIssueCode =
   | 'invalid-settings'

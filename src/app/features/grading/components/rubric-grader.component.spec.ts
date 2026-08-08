@@ -105,15 +105,17 @@ describe('RubricGraderComponent', () => {
       ]
     });
     const harness = await RouterTestingHarness.create();
-    await harness.navigateByUrl('/grading/attempt-denied', RubricGraderComponent);
+    const component = await harness.navigateByUrl('/grading/attempt-denied', RubricGraderComponent);
     await harness.fixture.whenStable();
+    await vi.waitFor(() => expect(component.facade.requestState().status).toBe('unauthorized'));
     harness.detectChanges();
-    await vi.waitFor(() => {
-      const element = harness.routeNativeElement as HTMLElement;
-      expect(element.querySelector('app-request-state')).not.toBeNull();
-    });
-    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
     const element = harness.routeNativeElement as HTMLElement;
+    const state = element.querySelector('app-request-state') as HTMLElement;
+    expect(state.textContent).toContain('Grading unavailable');
+    expect(state.textContent).toContain('Your role does not permit grading this attempt.');
+    expect(state.querySelector('[role="alert"]')).not.toBeNull();
+    expect(state.querySelector('button.retry-action')).toBeNull();
     expect(element.querySelector('form.grading-form')).toBeNull();
     expect(element.querySelectorAll('input[type="radio"]').length).toBe(0);
     expect(element.querySelectorAll('textarea').length).toBe(0);
@@ -132,12 +134,25 @@ describe('RubricGraderComponent', () => {
     const rubric = signal<RubricGrading['rubric'] | null>(null);
     const workflowState = signal<GradingWorkflowState | null>(null);
     const workflowStatus = signal<GradingWorkflowStatus | null>(null);
+    let loadMode: 'error' | 'unauthorized' | 'empty' = 'error';
+    const errorMessage = signal('Service unavailable');
     const load = vi.fn(() => {
-      requestState.set({ status: 'error', message: 'Service unavailable', retryable: true });
       grading.set(null);
       rubric.set(null);
       workflowState.set(null);
       workflowStatus.set(null);
+      if (loadMode === 'unauthorized') {
+        errorMessage.set('This grading attempt is outside your data scope.');
+        requestState.set({ status: 'unauthorized', message: errorMessage(), retryable: false });
+        return of(null);
+      }
+      if (loadMode === 'empty') {
+        errorMessage.set('No grading attempt is available for this route.');
+        requestState.set({ status: 'empty', message: errorMessage(), retryable: false });
+        return of(null);
+      }
+      errorMessage.set('Service unavailable');
+      requestState.set({ status: 'error', message: errorMessage(), retryable: true });
       return throwError(() => new Error('service'));
     });
     const retry = vi.fn(() => {
@@ -156,7 +171,7 @@ describe('RubricGraderComponent', () => {
     });
     const facade = {
       requestState,
-      errorMessage: signal('Service unavailable'),
+      errorMessage,
       grading,
       context: signal<RubricGrading['context'] | null>(null),
       rubric,
@@ -186,6 +201,12 @@ describe('RubricGraderComponent', () => {
     harness.detectChanges();
 
     expect(facade.context()).toBeNull();
+    const failedElement = harness.routeNativeElement as HTMLElement;
+    expect(failedElement.textContent).toContain('Unable to load grading');
+    expect(failedElement.textContent).toContain('Service unavailable');
+    expect(failedElement.querySelector('form.grading-form')).toBeNull();
+    expect(failedElement.querySelector('button.retry-action')).not.toBeNull();
+
     const retryButton = harness.routeNativeElement?.querySelector<HTMLButtonElement>('.retry-action');
     expect(retryButton).not.toBeNull();
     retryButton?.click();
@@ -197,6 +218,67 @@ describe('RubricGraderComponent', () => {
     expect(harness.routeNativeElement?.querySelector('form.grading-form')).not.toBeNull();
     expect(harness.routeNativeElement?.textContent).toContain(recovered.context.attemptId);
     expect(harness.routeNativeElement?.querySelector('.workflow-status')?.textContent).toContain('Pending');
+    loadMode = 'unauthorized';
+    component.load('attempt-retry');
+    harness.detectChanges();
+    const deniedElement = harness.routeNativeElement as HTMLElement;
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(deniedElement.textContent).toContain('Grading unavailable');
+    expect(deniedElement.textContent).toContain('This grading attempt is outside your data scope.');
+    expect(deniedElement.querySelector('form.grading-form')).toBeNull();
+    expect(deniedElement.textContent).not.toContain(recovered.context.attemptId);
+    expect(deniedElement.querySelector('button.retry-action')).toBeNull();
+    loadMode = 'empty';
+    component.load('attempt-retry');
+    harness.detectChanges();
+    const emptyElement = harness.routeNativeElement as HTMLElement;
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(emptyElement.textContent).toContain('No grading attempt found');
+    expect(emptyElement.querySelector('form.grading-form')).toBeNull();
+    expect(emptyElement.textContent).toContain('This route does not resolve to an available grading attempt.');
+  });
+
+  it('renders distinct loading and slow grading states at 399/400 ms and recovers the cleared form on retry', async () => {
+    TestBed.resetTestingModule();
+    vi.useFakeTimers();
+    let harness: RouterTestingHarness | undefined;
+    try {
+      const repository = new RubricGradingRepository(new MockTransport());
+      repository.setMockScenario({ latencyMs: 1_000 });
+      TestBed.configureTestingModule({
+        imports: [RubricGraderComponent],
+        providers: [
+          provideRouter([{ path: 'grading/:attemptId', component: RubricGraderComponent }]),
+          sessionStoreProvider(authorizedInstructorSession()),
+          { provide: RubricGradingRepository, useValue: repository }
+        ]
+      });
+      harness = await RouterTestingHarness.create();
+      const component = await harness.navigateByUrl('/grading/attempt-slow', RubricGraderComponent);
+      harness.detectChanges();
+      await vi.advanceTimersByTimeAsync(399);
+      harness.detectChanges();
+      expect(component.facade.requestState().status).toBe('loading');
+      expect(harness.routeNativeElement?.querySelector('.request-state--loading')).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      harness.detectChanges();
+      expect(component.facade.requestState().status).toBe('slow');
+      expect(harness.routeNativeElement?.querySelector('.request-state--slow')).not.toBeNull();
+      expect(harness.routeNativeElement?.textContent).toContain('Grading attempt is taking longer');
+      expect(harness.routeNativeElement?.querySelector('form.grading-form')).toBeNull();
+
+      repository.resetMockScenario();
+      (harness.routeNativeElement?.querySelector('button.retry-action') as HTMLButtonElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      harness.detectChanges();
+      expect(component.facade.requestState().status).toBe('ready');
+      expect(harness.routeNativeElement?.querySelector('form.grading-form')).not.toBeNull();
+      expect(component.rubricForm.controls.criteria.length).toBeGreaterThan(0);
+    } finally {
+      harness?.fixture.destroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it('reflects live rubric selections in the workflow status region as criteria are scored', async () => {

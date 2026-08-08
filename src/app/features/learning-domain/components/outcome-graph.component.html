@@ -1,4 +1,4 @@
-<section class="outcome-map" aria-labelledby="outcome-map-heading">
+<section class="outcome-map" [attr.aria-busy]="isBusy() ? 'true' : null" aria-labelledby="outcome-map-heading">
   <header class="page-heading">
     <div>
       <span class="eyebrow">Program manager workspace</span>
@@ -16,19 +16,26 @@
       <h2 id="outcome-map-denied-heading">Outcome map unavailable</h2>
       <p>Your data scope does not allow access to courses, outcomes, or content.</p>
     </section>
-  } @else if (isLoading()) {
-    <section class="state-card" aria-labelledby="outcome-map-loading-heading" aria-busy="true">
-      <span class="state-symbol" aria-hidden="true">…</span>
-      <h2 id="outcome-map-loading-heading">Loading outcome map</h2>
-      <p>Courses, outcomes, and related content are loading.</p>
-      <div class="loading-lines" aria-hidden="true"><span></span><span></span><span></span></div>
-    </section>
   } @else if (isServiceError()) {
     <section class="state-card state-card--error" aria-labelledby="outcome-map-error-heading">
       <span class="state-symbol" aria-hidden="true">!</span>
       <h2 id="outcome-map-error-heading">Unable to load outcome map</h2>
       <p>Some learning-domain data could not be loaded. Retry without losing your filters.</p>
       <button type="button" class="button button--secondary" (click)="retryLoad()">Retry loading</button>
+    </section>
+  } @else if (isSlow()) {
+    <app-request-state
+      state="slow"
+      title="Outcome map is taking longer than expected"
+      message="Courses, outcomes, and related content are still loading. You can wait or retry without losing your filters."
+      (retry)="retryLoad()"
+    />
+  } @else if (isLoading()) {
+    <section class="state-card" aria-labelledby="outcome-map-loading-heading" aria-busy="true">
+      <span class="state-symbol" aria-hidden="true">…</span>
+      <h2 id="outcome-map-loading-heading">Loading outcome map</h2>
+      <p>Courses, outcomes, and related content are loading.</p>
+      <div class="loading-lines" aria-hidden="true"><span></span><span></span><span></span></div>
     </section>
   } @else {
     @if (feedbackMessage()) {

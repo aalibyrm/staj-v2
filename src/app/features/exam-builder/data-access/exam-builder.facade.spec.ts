@@ -10,7 +10,9 @@ import {
   type ExamBlueprint,
   type ExamBlueprintCurrentCoverageInput
 } from '../models/exam-blueprint.models';
+import type { Exam } from '../models/exam.models';
 import { ExamBuilderFacade } from './exam-builder.facade';
+import { ExamRepository } from './exam.repository';
 
 const matchingCoverageFor = (target: ExamBlueprint): ExamBlueprintCurrentCoverageInput => ({
   outcomeBuckets: target.outcomeBuckets.map(({ key, targetQuestionCount, targetPoints }) => ({
@@ -86,6 +88,31 @@ const questionRepositoryStub = (
   listQuestions: vi.fn(() => list$),
   getQuestionVersionHistory: vi.fn(() => of(history))
 } as unknown as QuestionBankRepository);
+const examFor = (facade: ExamBuilderFacade, id = 'EXAM-1', status: 'draft' | 'published' = 'draft'): Exam => ({
+  id,
+  versionId: `${id}-v1`,
+  version: 1,
+  status,
+  title: `${id} title`,
+  durationMinutes: 60,
+  rules: [],
+  blueprint: facade.target(),
+  questionVersions: [],
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  publishedAt: status === 'published' ? '2026-01-01T00:00:00.000Z' : null,
+  publishedBy: status === 'published' ? 'account-1' : null,
+  changeNote: ''
+} as unknown as Exam);
+
+const examRepositoryStub = (
+  getCurrent$: Observable<Exam>,
+  history$: Observable<readonly Exam[]> = of([])
+): ExamRepository => ({
+  getCurrent: vi.fn(() => getCurrent$),
+  listVersionHistory: vi.fn(() => history$)
+} as unknown as ExamRepository);
+
 
 describe('ExamBuilderFacade', () => {
   it('derives canonical seed choices, an initial valid target, and truthful missing comparison', () => {
@@ -247,5 +274,168 @@ describe('ExamBuilderFacade', () => {
     first.complete();
 
     expect(facade.selectedPinnedSnapshots().map((item) => item.questionId)).toEqual([secondSnapshot.questionId]);
+  });
+  it('transitions the current-exam load to slow at 400 ms and cleans the timer on success', () => {
+    vi.useFakeTimers();
+    try {
+      const response = new Subject<Exam>();
+      const repository = examRepositoryStub(response);
+      const facade = new ExamBuilderFacade(repository);
+      const exam = examFor(facade);
+      facade.loadCurrent('EXAM-1').subscribe({ error: () => undefined });
+      expect(facade.currentExamLoadState()).toMatchObject({ status: 'loading' });
+      vi.advanceTimersByTime(399);
+      expect(facade.currentExamLoadState().status).toBe('loading');
+      vi.advanceTimersByTime(1);
+      expect(facade.currentExamLoadState()).toMatchObject({ status: 'slow', retryable: true });
+      response.next(exam);
+      response.complete();
+      expect(facade.currentExamLoadState()).toMatchObject({ status: 'success' });
+      expect(Object.isFrozen(facade.currentExamLoadState())).toBe(true);
+      vi.advanceTimersByTime(400);
+      expect(facade.currentExamLoadState().status).toBe('success');
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries the unchanged current-exam id/options for service errors and never retries unauthorized loads', async () => {
+    const getCurrent = vi.fn()
+      .mockReturnValueOnce(throwError(() => ({ kind: 'service' })))
+      .mockReturnValueOnce(of(undefined as unknown as Exam));
+    const repository = { getCurrent, listVersionHistory: vi.fn(() => of([])) } as unknown as ExamRepository;
+    const facade = new ExamBuilderFacade(repository);
+    const exam = examFor(facade, 'EXAM-7');
+    getCurrent.mockReset()
+      .mockReturnValueOnce(throwError(() => ({ kind: 'service' })))
+      .mockReturnValueOnce(of(exam));
+    await expect(firstValueFrom(facade.loadCurrent('EXAM-7', { expectedVersion: 3 }))).rejects.toMatchObject({ kind: 'service' });
+    expect(facade.currentExamLoadState()).toMatchObject({ status: 'error', retryable: true });
+    await firstValueFrom(facade.retryLoadCurrent());
+    expect(getCurrent).toHaveBeenNthCalledWith(2, 'EXAM-7', expect.objectContaining({ expectedVersion: 3 }));
+    const unauthorizedRepository = { getCurrent: vi.fn(() => throwError(() => ({ kind: 'unauthorized' }))), listVersionHistory: vi.fn(() => of([])) } as unknown as ExamRepository;
+    const unauthorizedFacade = new ExamBuilderFacade(unauthorizedRepository);
+    await expect(firstValueFrom(unauthorizedFacade.loadCurrent('EXAM-8'))).rejects.toMatchObject({ kind: 'unauthorized' });
+    expect(unauthorizedFacade.currentExamLoadState()).toMatchObject({ status: 'unauthorized' });
+    unauthorizedFacade.retryLoadCurrent().subscribe();
+    expect(unauthorizedRepository.getCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears stale data at a new boundary and ignores superseded current-exam responses', async () => {
+    const first = new Subject<Exam>();
+    const second = new Subject<Exam>();
+    const getCurrent = vi.fn();
+    const repository = { getCurrent, listVersionHistory: vi.fn(() => of([])) } as unknown as ExamRepository;
+    const facade = new ExamBuilderFacade(repository);
+    const old = examFor(facade, 'EXAM-OLD', 'published');
+    const latest = examFor(facade, 'EXAM-LATEST');
+    getCurrent
+      .mockReturnValueOnce(of(old))
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    await firstValueFrom(facade.loadCurrent('EXAM-OLD'));
+    const snapshot = selectionSnapshot();
+    facade.setSelectedQuestionVersions([snapshot]);
+    expect(facade.currentExam()?.id).toBe('EXAM-OLD');
+    facade.loadCurrent('EXAM-FIRST').subscribe({ error: () => undefined });
+    facade.loadCurrent('EXAM-LATEST').subscribe({ error: () => undefined });
+    expect(facade.currentExam()).toBeNull();
+    expect(facade.history()).toEqual([]);
+    expect(facade.selectedPinnedSnapshots()).toEqual([]);
+    first.next(examFor(facade, 'EXAM-FIRST'));
+    first.complete();
+    expect(facade.currentExam()).toBeNull();
+    second.next(latest);
+    second.complete();
+    expect(facade.currentExam()?.id).toBe('EXAM-LATEST');
+    expect(facade.currentExamLoadState().status).toBe('success');
+  });
+
+  it('invalidates pending writes and neutralizes workflow feedback at a newer current-exam load boundary', async () => {
+    const pendingWrite = new Subject<Exam>();
+    const latestLoad = new Subject<Exam>();
+    const getCurrent = vi.fn();
+    const repository = {
+      getCurrent,
+      listVersionHistory: vi.fn(() => of([])),
+      updateDraft: vi.fn(() => pendingWrite)
+    } as unknown as ExamRepository;
+    const facade = new ExamBuilderFacade(repository);
+    const old = examFor(facade, 'EXAM-OLD');
+    const latest = examFor(facade, 'EXAM-LATEST');
+    const staleWrite = examFor(facade, 'EXAM-STALE');
+    getCurrent.mockReturnValueOnce(of(old)).mockReturnValueOnce(latestLoad);
+
+    await firstValueFrom(facade.loadCurrent('EXAM-OLD'));
+    facade.saveDraft({ title: 'Pending change' }).subscribe({ error: () => undefined });
+    expect(facade.requestState()).toMatchObject({ status: 'saving' });
+
+    const latestSubscription = facade.loadCurrent('EXAM-LATEST').subscribe({ error: () => undefined });
+    expect(facade.requestState()).toEqual({ status: 'idle' });
+    expect(facade.currentExamLoadState()).toMatchObject({ status: 'loading' });
+    latestLoad.next(latest);
+    latestLoad.complete();
+    expect(facade.currentExam()).toBe(latest);
+    expect(facade.currentExamLoadState()).toMatchObject({ status: 'success' });
+    expect(facade.requestState()).toEqual({ status: 'idle' });
+
+    pendingWrite.next(staleWrite);
+    pendingWrite.complete();
+    expect(facade.currentExam()).toBe(latest);
+    expect(facade.currentExamLoadState()).toMatchObject({ status: 'success' });
+    expect(facade.requestState()).toEqual({ status: 'idle' });
+    latestSubscription.unsubscribe();
+  });
+  it('invalidates pending save and history callbacks at the new-draft boundary', () => {
+    const pendingSave = new Subject<Exam>();
+    const pendingHistory = new Subject<readonly Exam[]>();
+    const repository = {
+      createDraft: vi.fn(() => pendingSave),
+      listVersionHistory: vi.fn(() => pendingHistory)
+    } as unknown as ExamRepository;
+    const facade = new ExamBuilderFacade(repository);
+
+    facade.saveDraft({ title: 'Stale draft' }).subscribe({ error: () => undefined });
+    facade.loadHistory('EXAM-OLD').subscribe({ error: () => undefined });
+    expect(facade.requestState()).toEqual({ status: 'loading' });
+
+    facade.startNewDraft();
+    const staleExam = examFor(facade, 'EXAM-STALE');
+    pendingSave.next(staleExam);
+    pendingSave.complete();
+    pendingHistory.next([staleExam]);
+    pendingHistory.complete();
+
+    expect(facade.currentExam()).toBeNull();
+    expect(facade.history()).toEqual([]);
+    expect(facade.requestState()).toEqual({ status: 'idle' });
+    expect(facade.currentExamLoadState()).toEqual({ status: 'idle', message: 'Ready for a new exam draft.' });
+    expect(facade.settings()).toEqual({ title: 'Untitled exam', durationMinutes: 60, rules: [] });
+    expect(facade.selectedQuestionVersions()).toEqual([]);
+  });
+
+  it('clears load timers and rejects responses after cancellation or destruction', () => {
+    vi.useFakeTimers();
+    try {
+      const cancelled = new Subject<Exam>();
+      const destroyed = new Subject<Exam>();
+      const getCurrent = vi.fn().mockReturnValueOnce(cancelled).mockReturnValueOnce(destroyed);
+      const repository = { getCurrent, listVersionHistory: vi.fn(() => of([])) } as unknown as ExamRepository;
+      const facade = new ExamBuilderFacade(repository);
+      const first = facade.loadCurrent('EXAM-CANCEL').subscribe({ error: () => undefined });
+      first.unsubscribe();
+      vi.advanceTimersByTime(401);
+      expect(facade.currentExamLoadState().status).toBe('loading');
+      facade.loadCurrent('EXAM-DESTROY').subscribe({ error: () => undefined });
+      facade.ngOnDestroy();
+      vi.advanceTimersByTime(401);
+      destroyed.next(examFor(facade, 'EXAM-DESTROY'));
+      destroyed.complete();
+      expect(facade.currentExam()).toBeNull();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

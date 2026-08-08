@@ -11,10 +11,10 @@ import { PlatformEventBus, PlatformState } from '../../../core/state/platform-st
 import { ExamSessionFacade, EXAM_SESSION_QUESTION_SOURCE, type ExamSessionQuestionSource } from '../data-access/exam-session.facade';
 import { OfflineAnswerQueue } from '../data-access/offline-answer-queue';
 import { ExamSessionRepository } from '../data-access/exam-session.repository';
-import { createAnswerDraft, type AnswerDraft } from '../models/answer-draft.models';
+import { createAnswerDraft, type AnswerDraft, type ExamQuestionInput } from '../models/answer-draft.models';
 import { ExamSessionComponent } from './exam-session.component';
 
-const questionSource: ExamSessionQuestionSource = () => of([
+const rawQuestions: readonly ExamQuestionInput[] = [
   {
     id: 'question-a',
     order: 1,
@@ -39,7 +39,8 @@ const questionSource: ExamSessionQuestionSource = () => of([
     points: 1,
     options: [{ id: 'a', label: 'Recent evidence' }, { id: 'b', label: 'Relevant evidence' }]
   }
-]);
+];
+const questionSource: ExamSessionQuestionSource = () => of(rawQuestions);
 
 const createSessionFacade = (nowSource: () => number = () => 10): ExamSessionFacade => {
   const repository = new ExamSessionRepository({
@@ -151,6 +152,113 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
     expect(fixture.nativeElement.querySelector('app-request-state')).not.toBeNull();
     expect(fixture.nativeElement.textContent).toContain('Loading exam session');
   });
+  it('keeps route loading through 399 ms, shows slow at 400 ms, and retries the normalized token', async () => {
+    vi.useFakeTimers();
+    let sourceCalls = 0;
+    let fixture: ComponentFixture<ExamSessionComponent> | undefined;
+    let facade: ExamSessionFacade | undefined;
+    routeParam.mockReturnValue('  session-token  ');
+    const slowSource: ExamSessionQuestionSource = () => {
+      sourceCalls += 1;
+      return sourceCalls === 1 ? NEVER : of(rawQuestions);
+    };
+    try {
+      fixture = await create(slowSource, { keepFacadeAlive: true });
+      facade = fixture.componentInstance.facade;
+      expect(facade.requestState().status).toBe('loading');
+      await vi.advanceTimersByTimeAsync(399);
+      fixture.detectChanges();
+      expect(facade.requestState().status).toBe('loading');
+      expect(fixture.nativeElement.querySelector('.request-state--loading')).not.toBeNull();
+
+      const loadSpy = vi.spyOn(facade, 'load');
+      await vi.advanceTimersByTimeAsync(1);
+      fixture.detectChanges();
+      expect(facade.requestState().status).toBe('slow');
+      expect(fixture.nativeElement.querySelector('.request-state--slow')).not.toBeNull();
+      (fixture.nativeElement.querySelector('button.retry-action') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(loadSpy).toHaveBeenCalledWith('session-token');
+      expect(facade.requestState().status).toBe('ready');
+      expect(facade.questions()).toHaveLength(3);
+    } finally {
+      fixture?.destroy();
+      facade?.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears slow lifecycle state for terminal outcomes and keeps unauthorized/invalid tokens non-retryable', async () => {
+    vi.useFakeTimers();
+    const unauthorized = Object.assign(new Error('Access denied'), { kind: 'unauthorized' });
+    const terminalCases: readonly { source: ExamSessionQuestionSource; status: 'ready' | 'empty' | 'error' | 'unauthorized' }[] = [
+      { source: () => of(rawQuestions), status: 'ready' },
+      { source: () => of([]), status: 'empty' },
+      { source: () => throwError(() => new Error('Service unavailable')), status: 'error' },
+      { source: () => throwError(() => unauthorized), status: 'unauthorized' }
+    ];
+    try {
+      for (const testCase of terminalCases) {
+        const facade = new ExamSessionFacade(createControlledRepository(), testCase.source, () => 10);
+        facade.load('test-token').subscribe({ error: () => undefined });
+        expect(facade.requestState().status).toBe(testCase.status);
+        await vi.advanceTimersByTimeAsync(400);
+        expect(facade.requestState().status).toBe(testCase.status);
+        if (testCase.status === 'unauthorized') expect(facade.requestState().retryable).toBe(false);
+        facade.ngOnDestroy();
+      }
+
+      const invalidFacade = new ExamSessionFacade(createControlledRepository(), questionSource, () => 10);
+      invalidFacade.load('   ').subscribe({ error: () => undefined });
+      expect(invalidFacade.requestState()).toMatchObject({ status: 'error', retryable: false });
+      invalidFacade.retry().subscribe();
+      invalidFacade.ngOnDestroy();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('suppresses superseded responses and clears timers on cancellation and destruction', async () => {
+    vi.useFakeTimers();
+    const first = new Subject<readonly ExamQuestionInput[]>();
+    const second = new Subject<readonly ExamQuestionInput[]>();
+    const third = new Subject<readonly ExamQuestionInput[]>();
+    const fourth = new Subject<readonly ExamQuestionInput[]>();
+    const sources = [first, second, third, fourth];
+    const source: ExamSessionQuestionSource = () => sources.shift()!.asObservable();
+    const facade = new ExamSessionFacade(createControlledRepository(), source, () => 10);
+    const firstSubscription = facade.load('test-token').subscribe({ error: () => undefined });
+    try {
+      await vi.advanceTimersByTimeAsync(399);
+      facade.load('test-token').subscribe({ error: () => undefined });
+      first.next(rawQuestions);
+      first.complete();
+      expect(facade.requestState().status).toBe('loading');
+      expect(facade.session()).toBeNull();
+      expect(facade.questions()).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(facade.requestState().status).toBe('slow');
+
+      const cancellation = facade.load('test-token').subscribe({ error: () => undefined });
+      cancellation.unsubscribe();
+      expect(vi.getTimerCount()).toBe(0);
+      const destroySubscription = facade.load('test-token').subscribe({ error: () => undefined });
+      facade.ngOnDestroy();
+      fourth.next(rawQuestions);
+      fourth.complete();
+      expect(facade.session()).toBeNull();
+      expect(facade.questions()).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      destroySubscription.unsubscribe();
+    } finally {
+      firstSubscription.unsubscribe();
+      facade.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 
   it('renders an empty question set without private answer controls', async () => {
     const fixture = await create(() => of([]));
@@ -178,6 +286,20 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
       expect(facade.session()).not.toBeNull();
       expect(facade.questions()).toHaveLength(3);
       expect(fixture.nativeElement.querySelector('.question-card')).not.toBeNull();
+    } finally {
+      fixture.destroy();
+    }
+  });
+  it('renders unauthorized without retry and clears private session controls', async () => {
+    const source: ExamSessionQuestionSource = () => throwError(() => Object.assign(new Error('Access denied'), { kind: 'unauthorized' }));
+    const fixture = await create(source, { keepFacadeAlive: true });
+    try {
+      const element = fixture.nativeElement as HTMLElement;
+      expect(fixture.componentInstance.facade.requestState().status).toBe('unauthorized');
+      expect(element.querySelector('.request-state--assertive')).not.toBeNull();
+      expect(element.querySelector('button.retry-action')).toBeNull();
+      expect(element.querySelector('.question-card')).toBeNull();
+      expect(element.querySelector('textarea, input, .finish-button')).toBeNull();
     } finally {
       fixture.destroy();
     }

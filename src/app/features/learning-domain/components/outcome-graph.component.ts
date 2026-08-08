@@ -20,6 +20,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { distinctUntilChanged, startWith } from 'rxjs';
 import cytoscape from 'cytoscape';
 
+import { RequestStateComponent } from '../../../shared/components/request-state.component';
 import { LearningDomainFacade } from '../data-access/learning-domain.facade';
 import { LearningDomainError, type ContentAccessContext } from '../data-access/learning-domain.repository';
 import {
@@ -234,7 +235,7 @@ interface FilterFormValue {
 @Component({
   selector: 'app-outcome-graph',
   standalone: true,
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, RequestStateComponent],
   templateUrl: './outcome-graph.component.html',
   styleUrl: './outcome-graph.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -283,13 +284,27 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly isUnauthorized = computed(() =>
     [this.requests().courses, this.requests().outcomes, this.requests().content].some((request) => request.status === 'unauthorized')
   );
-  readonly isLoading = computed(() =>
-    !this.hasAttemptedLoad() || [this.requests().courses, this.requests().outcomes, this.requests().content].some((request) => request.status === 'loading')
+  readonly isLoading = computed(() => {
+    const requests = this.requests();
+    const coursesAwaitingLoad = !this.coursesLoaded() && requests.courses.status !== 'error' && requests.courses.status !== 'slow' && requests.courses.status !== 'unauthorized';
+    const outcomesAwaitingLoad = !this.outcomesLoaded() && requests.outcomes.status !== 'error' && requests.outcomes.status !== 'slow' && requests.outcomes.status !== 'unauthorized';
+    const contentAwaitingLoad = !this.contentLoaded() && requests.content.status !== 'error' && requests.content.status !== 'slow' && requests.content.status !== 'unauthorized';
+    return !this.hasAttemptedLoad() || requests.courses.status === 'loading' || requests.outcomes.status === 'loading' || requests.content.status === 'loading' || coursesAwaitingLoad || outcomesAwaitingLoad || contentAwaitingLoad;
+  });
+  readonly isServiceError = computed(() => {
+    const requests = this.requests();
+    return !this.isUnauthorized() && (
+      (requests.courses.status === 'error' && !this.coursesLoaded()) ||
+      (requests.outcomes.status === 'error' && !this.outcomesLoaded()) ||
+      (requests.content.status === 'error' && !this.contentLoaded())
+    );
+  });
+  readonly isSlow = computed(() =>
+    !this.isUnauthorized() && !this.isServiceError() &&
+    [this.requests().courses, this.requests().outcomes, this.requests().content].some((request) => request.status === 'slow')
   );
-  readonly isServiceError = computed(() =>
-    !this.isUnauthorized() && [this.requests().courses, this.requests().outcomes, this.requests().content].some((request) => request.status === 'error')
-  );
-  readonly isEmpty = computed(() => !this.isLoading() && !this.isServiceError() && this.outcomes().length === 0);
+  readonly isBusy = computed(() => this.isLoading() || this.isSlow());
+  readonly isEmpty = computed(() => !this.isLoading() && !this.isSlow() && !this.isServiceError() && this.outcomes().length === 0);
   readonly filters = computed<OutcomeGraphFilters>(() => ({
     ...(this.search().trim().length > 0 ? { search: this.search().trim() } : {}),
     ...(this.selectedCourseId().length > 0 ? { courseId: this.selectedCourseId() as CourseId } : {}),
@@ -327,8 +342,8 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
     return Object.freeze(this.graphModel().nodes.filter((node) => node.courseId === selected.courseId && node.id !== selected.id));
   });
   readonly riskyNodes = computed(() => this.graphModel().nodes.filter((node) => node.isRisky));
-  readonly graphVisible = computed(() => this.viewMode() === 'graph' && !this.isLoading() && !this.isUnauthorized() && !this.isServiceError() && !this.isEmpty());
-  readonly canEditRelations = computed(() => !this.isUnauthorized() && this.selectedOutcome() !== undefined && !this.isSaving());
+  readonly graphVisible = computed(() => this.viewMode() === 'graph' && !this.isLoading() && !this.isSlow() && !this.isUnauthorized() && !this.isServiceError() && !this.isEmpty());
+  readonly canEditRelations = computed(() => !this.isUnauthorized() && !this.isBusy() && this.selectedOutcome() !== undefined && !this.isSaving());
   readonly recommendedContent = computed<readonly OutcomeGraphRecommendation[]>(() => {
     const selected = this.selectedOutcome();
     if (selected === undefined || typeof this.facade.recommendLearningPath !== 'function') {
@@ -364,6 +379,7 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   private syncingFromUrl = false;
   private staleSelectionAnnouncementPending = false;
   private rawCourseQuery = '';
+  private loadRevision = 0;
 
   private readonly graphRenderEffect = effect(() => {
     this.graphElements();
@@ -401,33 +417,49 @@ export class OutcomeGraphComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   loadData(): void {
+    const loadRevision = ++this.loadRevision;
+    this.coursesLoaded.set(false);
+    this.outcomesLoaded.set(false);
+    this.contentLoaded.set(false);
     this.staleSelectionAnnouncementPending = false;
     this.hasAttemptedLoad.set(true);
     this.liveMessage.set('Loading courses, outcomes, and content.');
     this.facade.loadCourses().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.coursesLoaded.set(true);
         this.canonicalizeCourseQuery();
         if (!this.staleSelectionAnnouncementPending) this.liveMessage.set('Courses loaded.');
       },
-      error: () => this.liveMessage.set('Courses could not be loaded. Try again.')
+      error: () => {
+        if (loadRevision !== this.loadRevision) return;
+        this.liveMessage.set('Courses could not be loaded. Try again.');
+      }
     });
     this.facade.loadOutcomes().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.outcomesLoaded.set(true);
         this.clearStaleSelection();
         if (!this.staleSelectionAnnouncementPending) this.liveMessage.set('Outcomes loaded.');
       },
-      error: () => this.liveMessage.set('Outcomes could not be loaded. Try again.')
+      error: () => {
+        if (loadRevision !== this.loadRevision) return;
+        this.liveMessage.set('Outcomes could not be loaded. Try again.');
+      }
     });
     this.facade.loadContent({}, {
       contentAccess: { mode: 'management' } as ContentAccessContext
     }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
+        if (loadRevision !== this.loadRevision) return;
         this.contentLoaded.set(true);
         if (!this.staleSelectionAnnouncementPending) this.liveMessage.set('Content loaded.');
       },
-      error: () => this.liveMessage.set('Content could not be loaded. Try again.')
+      error: () => {
+        if (loadRevision !== this.loadRevision) return;
+        this.liveMessage.set('Content could not be loaded. Try again.');
+      }
     });
   }
 

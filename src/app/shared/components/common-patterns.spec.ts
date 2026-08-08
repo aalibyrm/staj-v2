@@ -49,19 +49,37 @@ const settle = async (harness: RouterTestingHarness): Promise<void> => {
 };
 
 describe('RequestStateComponent', () => {
-  it('renders every state with explicit text and non-color status cues', async () => {
+  it('renders every state with explicit status content, non-color cues, and only retryable actions', async () => {
     await TestBed.configureTestingModule({ imports: [RequestStateComponent] }).compileComponents();
     const fixture = TestBed.createComponent(RequestStateComponent);
 
-    const states: readonly RequestStateKind[] = ['loading', 'empty', 'slow', 'error', 'unauthorized'];
-    for (const state of states) {
+    const expectations: Readonly<Record<RequestStateKind, Readonly<{
+      readonly title: string;
+      readonly message: string;
+      readonly role: string;
+      readonly retryable: boolean;
+    }>>> = {
+      loading: { title: 'Loading', message: 'Content is loading. Please wait.', role: 'status', retryable: false },
+      empty: { title: 'No results', message: 'There is no content to display yet.', role: 'status', retryable: false },
+      slow: { title: 'Taking longer than expected', message: 'The request is still in progress. You can wait or try again.', role: 'status', retryable: true },
+      error: { title: 'Unable to load content', message: "We couldn't complete the request. Try again.", role: 'alert', retryable: true },
+      unauthorized: { title: 'Access unavailable', message: 'You do not have permission to view this content.', role: 'alert', retryable: false }
+    };
+
+    for (const state of ['loading', 'empty', 'slow', 'error', 'unauthorized'] as const) {
       fixture.componentRef.setInput('state', state);
       fixture.detectChanges();
 
       const element = fixture.nativeElement as HTMLElement;
+      const section = element.querySelector('section.request-state') as HTMLElement;
+      const expected = expectations[state];
       expect(element.querySelector('.state-symbol')?.textContent?.trim()).not.toBe('');
-      expect(element.querySelector('h2')?.textContent?.trim()).not.toBe('');
-      expect(element.querySelector('p')?.textContent?.trim()).not.toBe('');
+      expect(element.querySelector('h2')?.textContent?.trim()).toBe(expected.title);
+      expect(element.querySelector('p')?.textContent?.trim()).toBe(expected.message);
+      expect(section.getAttribute('role')).toBe(expected.role);
+      const retry = element.querySelector('button.retry-action') as HTMLButtonElement | null;
+      expect(retry === null).toBe(!expected.retryable);
+      if (retry !== null) expect(retry.textContent?.trim()).toBe('Try again');
     }
   });
 

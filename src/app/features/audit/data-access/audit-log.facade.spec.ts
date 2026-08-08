@@ -1,12 +1,13 @@
 import { signal, type WritableSignal } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { firstValueFrom, Subject } from 'rxjs';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DEMO_ACCOUNTS, type AuthSession } from '../../../core/auth/authorization';
 import type { SessionStore } from '../../../core/auth/session.store';
 import { MockTransport } from '../../../core/api/mock-transport';
 import { DEFAULT_AUDIT_LOG_QUERY, type AuditLogQuery } from '../domain/audit-log-query';
 import { AuditLogFacade } from './audit-log.facade';
+import type { AuditLogRecord } from '../models/audit-log.models';
 import { AuditLogRepository } from './audit-log.repository';
 
 const accountFor = (role: (typeof DEMO_ACCOUNTS)[number]['roleCode']) =>
@@ -127,5 +128,192 @@ describe('AuditLogFacade request states', () => {
     await firstValueFrom(stale).catch(() => undefined);
     expect(facade.requestState().status).toBe('ready');
     expect(facade.query()).toEqual(DEFAULT_AUDIT_LOG_QUERY);
+  });
+  it('keeps authorized loading through 399 ms, becomes audit-specific slow at 400 ms, and clears the timer on empty success', () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new AuditLogRepository(new MockTransport());
+      const response = new Subject<readonly AuditLogRecord[]>();
+      repository.list = (() => response.asObservable()) as typeof repository.list;
+      const { store } = fakeSessionStore(sessionFor('PLATFORM_ADMINISTRATOR'));
+      const facade = new AuditLogFacade(repository, store);
+
+      const subscription = facade.load(DEFAULT_AUDIT_LOG_QUERY).subscribe();
+      expect(facade.requestState().status).toBe('loading');
+      vi.advanceTimersByTime(399);
+      expect(facade.requestState().status).toBe('loading');
+      vi.advanceTimersByTime(1);
+      expect(facade.requestState()).toMatchObject({
+        status: 'slow',
+        message: 'The audit log is still loading. You can wait or retry.',
+        retryable: true
+      });
+
+      response.next([]);
+      response.complete();
+      expect(facade.requestState().status).toBe('empty');
+      vi.advanceTimersByTime(400);
+      expect(facade.requestState().status).toBe('empty');
+      subscription.unsubscribe();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries a slow load with the exact last query and ignores the superseded response before recovery', () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new AuditLogRepository(new MockTransport());
+      const firstResponse = new Subject<readonly AuditLogRecord[]>();
+      const retryResponse = new Subject<readonly AuditLogRecord[]>();
+      let calls = 0;
+      repository.list = (() => {
+        calls += 1;
+        return (calls === 1 ? firstResponse : retryResponse).asObservable();
+      }) as typeof repository.list;
+      const { store } = fakeSessionStore(sessionFor('PLATFORM_ADMINISTRATOR'));
+      const facade = new AuditLogFacade(repository, store);
+      const query = queryWith({ search: 'exact-query', page: 2, pageSize: 10 });
+
+      const firstSubscription = facade.load(query).subscribe();
+      vi.advanceTimersByTime(400);
+      expect(facade.requestState().status).toBe('slow');
+
+      const retrySubscription = facade.retry().subscribe();
+      expect(calls).toBe(2);
+      expect(facade.query()).toBe(query);
+      expect(facade.requestState().status).toBe('loading');
+      expect(facade.records()).toEqual([]);
+
+      firstResponse.next([]);
+      firstResponse.complete();
+      expect(facade.requestState().status).toBe('loading');
+      retryResponse.next([]);
+      retryResponse.complete();
+      expect(facade.requestState().status).toBe('empty');
+
+      firstSubscription.unsubscribe();
+      retrySubscription.unsubscribe();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps terminal conflict and transport-unauthorized outcomes non-retryable and clears their slow timers', () => {
+    vi.useFakeTimers();
+    try {
+      for (const outcome of ['conflict', 'unauthorized'] as const) {
+        const repository = new AuditLogRepository(new MockTransport());
+        const response = new Subject<readonly AuditLogRecord[]>();
+        let calls = 0;
+        repository.list = (() => {
+          calls += 1;
+          return response.asObservable();
+        }) as typeof repository.list;
+        const { store } = fakeSessionStore(sessionFor('PLATFORM_ADMINISTRATOR'));
+        const facade = new AuditLogFacade(repository, store);
+        const subscription = facade.load(DEFAULT_AUDIT_LOG_QUERY).subscribe({ error: () => undefined });
+
+        response.error({ kind: outcome });
+        expect(facade.requestState().status).toBe(outcome === 'conflict' ? 'error' : 'unauthorized');
+        expect(facade.requestState().retryable).toBe(false);
+        facade.retry().subscribe();
+        expect(calls).toBe(1);
+        vi.advanceTimersByTime(401);
+        expect(facade.requestState().status).toBe(outcome === 'conflict' ? 'error' : 'unauthorized');
+        subscription.unsubscribe();
+      }
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears stale records and selection at a blocking load boundary', async () => {
+    const repository = new AuditLogRepository(new MockTransport());
+    const { store } = fakeSessionStore(sessionFor('PLATFORM_ADMINISTRATOR'));
+    const facade = new AuditLogFacade(repository, store);
+    await firstValueFrom(facade.load(DEFAULT_AUDIT_LOG_QUERY));
+    const loaded = facade.records();
+    facade.select(loaded[0].id);
+    expect(facade.selectedRecord()?.id).toBe(loaded[0].id);
+
+    const response = new Subject<readonly AuditLogRecord[]>();
+    repository.list = (() => response.asObservable()) as typeof repository.list;
+    const nextQuery = queryWith({ search: loaded[0].targetId });
+    const subscription = facade.load(nextQuery).subscribe();
+    expect(facade.requestState().status).toBe('loading');
+    expect(facade.records()).toEqual([]);
+    expect(facade.selectedRecord()).toBeNull();
+    expect(facade.query()).toBe(nextQuery);
+    response.next(loaded);
+    response.complete();
+    expect(facade.requestState().status).toBe('ready');
+    subscription.unsubscribe();
+  });
+
+  it('does not let a superseded response cancel the current slow timer or replace current state', () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new AuditLogRepository(new MockTransport());
+      const staleResponse = new Subject<readonly AuditLogRecord[]>();
+      const currentResponse = new Subject<readonly AuditLogRecord[]>();
+      let calls = 0;
+      repository.list = (() => {
+        calls += 1;
+        return (calls === 1 ? staleResponse : currentResponse).asObservable();
+      }) as typeof repository.list;
+      const { store } = fakeSessionStore(sessionFor('PLATFORM_ADMINISTRATOR'));
+      const facade = new AuditLogFacade(repository, store);
+      const staleSubscription = facade.load(queryWith({ pageSize: 1 })).subscribe();
+      vi.advanceTimersByTime(399);
+      const currentQuery = DEFAULT_AUDIT_LOG_QUERY;
+      const currentSubscription = facade.load(currentQuery).subscribe();
+      vi.advanceTimersByTime(400);
+      expect(facade.requestState().status).toBe('slow');
+
+      staleResponse.next([]);
+      staleResponse.complete();
+      expect(facade.requestState().status).toBe('slow');
+      expect(facade.query()).toBe(currentQuery);
+      currentResponse.next([]);
+      currentResponse.complete();
+      expect(facade.requestState().status).toBe('empty');
+      staleSubscription.unsubscribe();
+      currentSubscription.unsubscribe();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the slow timer on cancellation and destruction and ignores post-destroy completion', () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new AuditLogRepository(new MockTransport());
+      const response = new Subject<readonly AuditLogRecord[]>();
+      repository.list = (() => response.asObservable()) as typeof repository.list;
+      const { store } = fakeSessionStore(sessionFor('PLATFORM_ADMINISTRATOR'));
+      const facade = new AuditLogFacade(repository, store);
+      const cancelled = facade.load(DEFAULT_AUDIT_LOG_QUERY).subscribe();
+      vi.advanceTimersByTime(399);
+      cancelled.unsubscribe();
+      vi.advanceTimersByTime(401);
+      expect(facade.requestState().status).toBe('loading');
+
+      const destroyed = facade.load(DEFAULT_AUDIT_LOG_QUERY).subscribe();
+      facade.ngOnDestroy();
+      vi.advanceTimersByTime(401);
+      response.next([]);
+      response.complete();
+      expect(facade.requestState().status).toBe('loading');
+      expect(facade.records()).toEqual([]);
+      destroyed.unsubscribe();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

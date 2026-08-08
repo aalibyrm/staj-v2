@@ -1,6 +1,6 @@
 import { signal, type WritableSignal } from '@angular/core';
-import { firstValueFrom, of, throwError } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { firstValueFrom, of, Subject, throwError } from 'rxjs';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DEMO_ACCOUNTS, type AuthSession } from '../../../core/auth/authorization';
 import type { SessionStore } from '../../../core/auth/session.store';
@@ -10,6 +10,7 @@ import { NotificationPort, type NotificationMessage } from '../../../core/observ
 import type { AuditEventDraft, AuditPort } from '../../../core/observability/observability.ports';
 import { RubricGradingFacade } from './rubric-grading.facade';
 import { createNeutralFixture, RubricGradingRepository } from './rubric-grading.repository';
+import type { RubricGrading } from '../models/rubric.models';
 import { SCORE_CHANGE_ERROR_CODES, ScoreChangeError } from '../models/score-change.models';
 
 const instructorAccount = DEMO_ACCOUNTS.find((account) => account.roleCode === 'INSTRUCTOR')!;
@@ -168,6 +169,121 @@ describe('RubricGradingFacade', () => {
     expect(facade.requestState().status).toBe('ready');
     expect(facade.context()?.attemptId).toBe('current-attempt');
     expect(facade.grading()).not.toBeNull();
+  });
+});
+
+describe('RubricGradingFacade slow state', () => {
+  it('keeps current loading distinct from slow, retries the normalized frozen request, and recovers grading', async () => {
+    vi.useFakeTimers();
+    let facade: RubricGradingFacade | undefined;
+    let subscription: { unsubscribe: () => void } | undefined;
+    try {
+      const repository = new RubricGradingRepository(new MockTransport());
+      repository.setMockScenario({ latencyMs: 1_000 });
+      const { store } = fakeSessionStore(authorizedInstructorSession());
+      facade = new RubricGradingFacade(repository, store);
+      const getByAttemptId = vi.spyOn(repository, 'getByAttemptId');
+
+      subscription = facade.load('  attempt-slow  ', { retryLimit: 1 }).subscribe({ error: () => undefined });
+      await vi.advanceTimersByTimeAsync(399);
+      expect(facade.requestState()).toMatchObject({ status: 'loading' });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(facade.requestState()).toMatchObject({
+        status: 'slow',
+        retryable: true
+      });
+
+      subscription.unsubscribe();
+      subscription = undefined;
+      expect(vi.getTimerCount()).toBe(0);
+
+      repository.resetMockScenario();
+      const recovered = firstValueFrom(facade.retry());
+      await vi.advanceTimersByTimeAsync(0);
+      await recovered;
+      expect(facade.requestState().status).toBe('ready');
+      expect(facade.context()?.attemptId).toBe('attempt-slow');
+      const retryCall = getByAttemptId.mock.calls[1];
+      expect(retryCall?.[0]).toBe('attempt-slow');
+      expect(retryCall?.[1]).toEqual({ retryLimit: 1 });
+      expect(Object.isFrozen(retryCall?.[1])).toBe(true);
+    } finally {
+      subscription?.unsubscribe();
+      facade?.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears timers for terminal outcomes, superseded responses, cancellation, clear, and destruction', async () => {
+    vi.useFakeTimers();
+    let facade: RubricGradingFacade | undefined;
+    let firstSubscription: { unsubscribe: () => void } | undefined;
+    let currentSubscription: { unsubscribe: () => void } | undefined;
+    try {
+      const repository = new RubricGradingRepository(new MockTransport());
+      const { store } = fakeSessionStore(authorizedInstructorSession());
+
+      for (const testCase of [
+        { outcome: 'success' as const, expected: 'ready' as const },
+        { outcome: 'unauthorized' as const, expected: 'unauthorized' as const },
+        { outcome: 'service-error' as const, expected: 'error' as const }
+      ]) {
+        repository.setMockScenario({ latencyMs: 0, outcome: testCase.outcome });
+        facade = new RubricGradingFacade(repository, store);
+        const terminal = firstValueFrom(facade.load(`terminal-${testCase.expected}`)).catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        await terminal;
+        expect(facade.requestState().status).toBe(testCase.expected);
+        await vi.advanceTimersByTimeAsync(400);
+        expect(facade.requestState().status).toBe(testCase.expected);
+        facade.ngOnDestroy();
+      }
+      repository.resetMockScenario();
+      facade = new RubricGradingFacade(repository, store);
+      const emptyResult = firstValueFrom(facade.load('empty-attempt', { empty: true }));
+      await vi.advanceTimersByTimeAsync(0);
+      const empty = await emptyResult;
+      expect(facade.requestState().status).toBe('empty');
+      await vi.advanceTimersByTimeAsync(400);
+      expect(facade.requestState().status).toBe('empty');
+
+      repository.setMockScenario({ latencyMs: 1_000 });
+      firstSubscription = facade.load('cancel-attempt').subscribe({ error: () => undefined });
+      firstSubscription.unsubscribe();
+      firstSubscription = undefined;
+      expect(vi.getTimerCount()).toBe(0);
+      facade.clear();
+      expect(facade.requestState().status).toBe('idle');
+
+      const stale = new Subject<RubricGrading | null>();
+      const current = new Subject<RubricGrading | null>();
+      vi.spyOn(repository, 'getByAttemptId').mockImplementation((attemptId) =>
+        attemptId === 'stale-attempt' ? stale.asObservable() : current.asObservable()
+      );
+      firstSubscription = facade.load('stale-attempt').subscribe({ error: () => undefined });
+      currentSubscription = facade.load('current-attempt').subscribe({ error: () => undefined });
+      stale.next(repository.fixtureForAttempt('stale-attempt'));
+      stale.complete();
+      expect(facade.grading()).toBeNull();
+      expect(facade.requestState().status).toBe('loading');
+      current.next(repository.fixtureForAttempt('current-attempt'));
+      current.complete();
+      expect(facade.context()?.attemptId).toBe('current-attempt');
+      expect(facade.requestState().status).toBe('ready');
+      expect(vi.getTimerCount()).toBe(0);
+
+      firstSubscription.unsubscribe();
+      currentSubscription.unsubscribe();
+      facade.ngOnDestroy();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      firstSubscription?.unsubscribe();
+      currentSubscription?.unsubscribe();
+      facade?.ngOnDestroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 

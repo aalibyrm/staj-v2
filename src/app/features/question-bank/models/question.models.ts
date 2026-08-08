@@ -279,6 +279,7 @@ export interface QuestionListResponse {
 export type QuestionBankRequestStatus =
   | 'idle'
   | 'loading'
+  | 'slow'
   | 'success'
   | 'empty'
   | 'error'
@@ -287,6 +288,7 @@ export type QuestionBankRequestStatus =
 export interface QuestionBankRequestState {
   readonly status: QuestionBankRequestStatus;
   readonly message?: string;
+  readonly retryable?: boolean;
 }
 
 export const EMPTY_QUESTION_STATUS_COUNTS: QuestionStatusCounts = Object.freeze({

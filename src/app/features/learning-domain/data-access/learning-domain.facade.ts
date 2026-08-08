@@ -1,6 +1,6 @@
-import { Injectable, Optional } from '@angular/core';
+import { Injectable, Optional, type OnDestroy } from '@angular/core';
 import { defer, throwError, type Observable } from 'rxjs';
-import { catchError, tap } from 'rxjs/operators';
+import { catchError, finalize, tap } from 'rxjs/operators';
 
 import { ApiTransportError } from '../../../core/api/api-error';
 import {
@@ -38,9 +38,17 @@ import {
   type LearningDomainRequestStatus,
   type LearningDomainResource
 } from '../state/learning-domain.store';
+const SLOW_REQUEST_DELAY_MS = 400;
+
+type LearningDomainSlowTimerHandle = number;
+
+type LearningDomainSlowTimer = Readonly<{
+  requestId: number;
+  handle: LearningDomainSlowTimerHandle;
+}>;
 
 @Injectable({ providedIn: 'root' })
-export class LearningDomainFacade {
+export class LearningDomainFacade implements OnDestroy {
   private readonly repository: LearningDomainRepository;
   private readonly store: LearningDomainStore;
   private readonly latestRequestIds: Record<LearningDomainResource, number> = {
@@ -49,6 +57,7 @@ export class LearningDomainFacade {
     content: 0,
     paths: 0
   };
+  private readonly slowTimers: Partial<Record<LearningDomainResource, LearningDomainSlowTimer>> = {};
   private requestSequence = 0;
 
   get state() {
@@ -166,15 +175,18 @@ export class LearningDomainFacade {
     return defer(() => {
       this.store.setCourseFilter(filter);
       const requestId = this.begin('courses');
+      this.startSlowTimer('courses', requestId);
       return this.repository.listCourses(filter, options).pipe(
         tap((courses) => {
           if (!this.isCurrent('courses', requestId)) {
             return;
           }
+          this.clearSlowTimer('courses', requestId);
           this.store.replaceCourses(courses);
           this.store.completeRequest('courses', requestId, courses.length);
         }),
-        catchError((error: unknown) => this.handleFailure<readonly Course[]>('courses', requestId, error))
+        catchError((error: unknown) => this.handleFailure<readonly Course[]>('courses', requestId, error)),
+        finalize(() => this.clearSlowTimer('courses', requestId))
       );
     });
   }
@@ -186,15 +198,18 @@ export class LearningDomainFacade {
     return defer(() => {
       this.store.setOutcomeFilter(filter);
       const requestId = this.begin('outcomes');
+      this.startSlowTimer('outcomes', requestId);
       return this.repository.listOutcomes(filter, options).pipe(
         tap((outcomes) => {
           if (!this.isCurrent('outcomes', requestId)) {
             return;
           }
+          this.clearSlowTimer('outcomes', requestId);
           this.store.replaceOutcomes(outcomes);
           this.store.completeRequest('outcomes', requestId, outcomes.length);
         }),
-        catchError((error: unknown) => this.handleFailure<readonly LearningOutcome[]>('outcomes', requestId, error))
+        catchError((error: unknown) => this.handleFailure<readonly LearningOutcome[]>('outcomes', requestId, error)),
+        finalize(() => this.clearSlowTimer('outcomes', requestId))
       );
     });
   }
@@ -206,15 +221,18 @@ export class LearningDomainFacade {
     return defer(() => {
       this.store.setContentFilter(filter);
       const requestId = this.begin('content');
+      this.startSlowTimer('content', requestId);
       return this.repository.listContent(filter, options).pipe(
         tap((content) => {
           if (!this.isCurrent('content', requestId)) {
             return;
           }
+          this.clearSlowTimer('content', requestId);
           this.store.replaceContent(content);
           this.store.completeRequest('content', requestId, content.length);
         }),
-        catchError((error: unknown) => this.handleFailure<readonly ContentItem[]>('content', requestId, error))
+        catchError((error: unknown) => this.handleFailure<readonly ContentItem[]>('content', requestId, error)),
+        finalize(() => this.clearSlowTimer('content', requestId))
       );
     });
   }
@@ -233,15 +251,18 @@ export class LearningDomainFacade {
     return defer(() => {
       this.store.setPathFilter(filter);
       const requestId = this.begin('paths');
+      this.startSlowTimer('paths', requestId);
       return this.repository.listPaths(filter, options).pipe(
         tap((paths) => {
           if (!this.isCurrent('paths', requestId)) {
             return;
           }
+          this.clearSlowTimer('paths', requestId);
           this.store.replacePaths(paths);
           this.store.completeRequest('paths', requestId, paths.length);
         }),
-        catchError((error: unknown) => this.handleFailure<readonly LearningPath[]>('paths', requestId, error))
+        catchError((error: unknown) => this.handleFailure<readonly LearningPath[]>('paths', requestId, error)),
+        finalize(() => this.clearSlowTimer('paths', requestId))
       );
     });
   }
@@ -502,11 +523,42 @@ export class LearningDomainFacade {
     return this.deletePath(id, options);
   }
 
+  ngOnDestroy(): void {
+    for (const resource of Object.keys(this.slowTimers) as LearningDomainResource[]) {
+      this.clearSlowTimer(resource);
+    }
+  }
+
   private begin(resource: LearningDomainResource): number {
+    this.clearSlowTimer(resource);
     this.requestSequence += 1;
     this.latestRequestIds[resource] = this.requestSequence;
     this.store.beginRequest(resource, this.requestSequence);
     return this.requestSequence;
+  }
+
+  private startSlowTimer(resource: LearningDomainResource, requestId: number): void {
+    this.clearSlowTimer(resource);
+    const handle = setTimeout(() => {
+      const timer = this.slowTimers[resource];
+      if (timer?.requestId !== requestId) {
+        return;
+      }
+      this.clearSlowTimer(resource, requestId);
+      if (this.isCurrent(resource, requestId)) {
+        this.store.markRequestSlow(resource, requestId);
+      }
+    }, SLOW_REQUEST_DELAY_MS);
+    this.slowTimers[resource] = { requestId, handle };
+  }
+
+  private clearSlowTimer(resource: LearningDomainResource, requestId?: number): void {
+    const timer = this.slowTimers[resource];
+    if (timer === undefined || (requestId !== undefined && timer.requestId !== requestId)) {
+      return;
+    }
+    clearTimeout(timer.handle);
+    delete this.slowTimers[resource];
   }
 
   private isCurrent(resource: LearningDomainResource, requestId: number): boolean {
@@ -519,6 +571,7 @@ export class LearningDomainFacade {
     error: unknown
   ): Observable<T> {
     if (this.isCurrent(resource, requestId)) {
+      this.clearSlowTimer(resource, requestId);
       const status = this.statusForError(error);
       const errorCode = error instanceof LearningDomainError ? error.code : undefined;
       this.store.failRequest(resource, requestId, error, status, errorCode);
@@ -526,7 +579,9 @@ export class LearningDomainFacade {
     return throwError(() => error);
   }
 
-  private statusForError(error: unknown): Exclude<LearningDomainRequestStatus, 'idle' | 'loading' | 'success' | 'empty'> {
+  private statusForError(
+    error: unknown
+  ): Exclude<LearningDomainRequestStatus, 'idle' | 'loading' | 'slow' | 'success' | 'empty'> {
     if (error instanceof ApiTransportError) {
       if (error.kind === 'unauthorized') {
         return 'unauthorized';
