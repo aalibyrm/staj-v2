@@ -43,6 +43,10 @@ const loadStudentAnalytics = () =>
   import('../analytics/components/student-analytics.component').then(
     ({ StudentAnalyticsComponent }) => StudentAnalyticsComponent
   );
+const loadCohortAnalytics = () =>
+  import('../analytics/components/cohort-analytics.component').then(
+    ({ CohortAnalyticsComponent }) => CohortAnalyticsComponent
+  );
 
 const loadAuditLog = () =>
   import('../audit/components/audit-log.component').then(
@@ -215,12 +219,21 @@ export const adaptiveLearningRoutes: Routes = [
     },
     loadComponent: loadStudentAnalytics
   },
-  placeholderRoute('cohort-analytics', 'Cohort analytics', [
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.measurementWorkspace,
-    ROUTE_CAPABILITIES.programWorkspace,
-    ROUTE_CAPABILITIES.observerReports
-  ]),
+  {
+    path: 'cohort-analytics',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Cohort analytics',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.measurementWorkspace,
+        ROUTE_CAPABILITIES.programWorkspace,
+        ROUTE_CAPABILITIES.observerReports
+      ]
+    },
+    loadComponent: loadCohortAnalytics
+  },
   placeholderRoute('item-analysis', 'Item analysis', [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace
