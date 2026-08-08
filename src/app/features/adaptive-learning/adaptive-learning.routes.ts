@@ -39,6 +39,11 @@ const loadRubricGrader = () =>
   import('../grading/components/rubric-grader.component').then(
     ({ RubricGraderComponent }) => RubricGraderComponent
   );
+const loadStudentAnalytics = () =>
+  import('../analytics/components/student-analytics.component').then(
+    ({ StudentAnalyticsComponent }) => StudentAnalyticsComponent
+  );
+
 const loadAuditLog = () =>
   import('../audit/components/audit-log.component').then(
     ({ AuditLogComponent }) => AuditLogComponent
@@ -196,11 +201,20 @@ export const adaptiveLearningRoutes: Routes = [
     },
     loadComponent: loadRubricGrader
   },
-  placeholderRoute('student/:id/analytics', 'Student analytics', [
-    ROUTE_CAPABILITIES.studentLearning,
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.programWorkspace
-  ]),
+  {
+    path: 'student/:id/analytics',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Student analytics',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.studentLearning,
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.programWorkspace
+      ]
+    },
+    loadComponent: loadStudentAnalytics
+  },
   placeholderRoute('cohort-analytics', 'Cohort analytics', [
     ROUTE_CAPABILITIES.instructorTeaching,
     ROUTE_CAPABILITIES.measurementWorkspace,

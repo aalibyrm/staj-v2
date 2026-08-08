@@ -1,0 +1,150 @@
+import { TestBed } from '@angular/core/testing';
+import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
+import { of } from 'rxjs';
+import { vi } from 'vitest';
+
+import { DEMO_ACCOUNTS } from '../../../core/auth/authorization';
+import { SessionStore } from '../../../core/auth/session.store';
+import { adaptiveLearningRoutes } from '../../adaptive-learning/adaptive-learning.routes';
+import { StudentAnalyticsComponent } from './student-analytics.component';
+
+const ownStudentId = 'STUDENT-MATH101-2025-FALL-A-01';
+const unrelatedStudentId = 'STUDENT-EDU201-2025-FALL-A-01';
+const routeFor = (studentId: string, query: Record<string, string> = {}) => ({
+  paramMap: of(convertToParamMap({ id: studentId })),
+  queryParamMap: of(convertToParamMap(query))
+});
+const accountIdFor = (role: string): string =>
+  DEMO_ACCOUNTS.find((account) => account.roleCode === role)?.id ?? '';
+
+describe('StudentAnalyticsComponent', () => {
+  let sessionStore: SessionStore;
+  let router: { navigate: (...args: readonly unknown[]) => Promise<boolean> };
+  let originalIntersectionObserver: typeof IntersectionObserver | undefined;
+
+  beforeEach(() => {
+    originalIntersectionObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      readonly root: Element | null = null;
+      readonly rootMargin = '';
+      readonly thresholds: readonly number[] = [];
+      disconnect(): void {}
+      observe(_target: Element): void {}
+      takeRecords(): IntersectionObserverEntry[] { return []; }
+      unobserve(_target: Element): void {}
+    } as unknown as typeof IntersectionObserver;
+  });
+
+  function createScreen(
+    studentId = ownStudentId,
+    query: Record<string, string> = {},
+    role = 'STUDENT'
+  ) {
+    router = { navigate: vi.fn().mockResolvedValue(true) };
+    TestBed.configureTestingModule({
+      imports: [StudentAnalyticsComponent],
+      providers: [
+        { provide: ActivatedRoute, useValue: routeFor(studentId, query) },
+        { provide: Router, useValue: router }
+      ]
+    });
+    sessionStore = TestBed.inject(SessionStore);
+    sessionStore.signIn(accountIdFor(role));
+    const fixture = TestBed.createComponent(StudentAnalyticsComponent);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  afterEach(() => {
+    sessionStore?.signOut();
+    if (originalIntersectionObserver === undefined) {
+      Reflect.deleteProperty(globalThis, 'IntersectionObserver');
+    } else {
+      globalThis.IntersectionObserver = originalIntersectionObserver;
+    }
+  });
+
+  it('keeps the student route lazy and preserves the three route capabilities', async () => {
+    const route = adaptiveLearningRoutes.find((candidate) => candidate.path === 'student/:id/analytics');
+    expect(route?.pathMatch).toBe('full');
+    expect(route?.canMatch?.length).toBe(1);
+    expect(route?.data?.['title']).toBe('Student analytics');
+    expect(route?.loadComponent).toBeDefined();
+    const component = await route?.loadComponent?.();
+    expect(component).toBe(StudentAnalyticsComponent);
+  });
+
+  it('renders scoped KPIs, heatmap semantics, engine reasons, and memoized selectors', async () => {
+    const fixture = createScreen();
+    const facade = fixture.componentInstance.facade;
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.chart-placeholder')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-mastery-trend')).toBeNull();
+    expect(facade.studentContext()?.id).toBe(ownStudentId);
+    expect(facade.kpis().length).toBe(4);
+    expect(facade.heatmapRows().length).toBeGreaterThan(0);
+    expect(facade.recommendations().every((item) => item.reason.code.length > 0)).toBe(true);
+    expect(facade.heatmapRows()).toBe(facade.heatmapRows());
+    const firstTrend = facade.trendRows();
+    const outcomeId = facade.filterOptions().outcomes[0]?.value;
+    expect(outcomeId).toBeDefined();
+    facade.updateFilters({ outcomeId });
+    TestBed.tick();
+    await fixture.whenStable();
+    expect(facade.requestState().status).toBe('ready');
+    expect(facade.trendRows()).not.toBe(firstTrend);
+    fixture.detectChanges();
+    expect(facade.trendRows()).not.toBe(firstTrend);
+    const table = fixture.nativeElement.querySelector('app-mastery-heatmap table');
+    expect(table).not.toBeNull();
+    expect(table.textContent).toContain('Outcome mastery by period');
+    expect(fixture.nativeElement.textContent).toContain('Explainable');
+  });
+
+  it('canonicalizes URL filters while preserving the route scope and denies unrelated students', async () => {
+    const fixture = createScreen(ownStudentId, {
+      course: 'invalid-course',
+      outcome: 'invalid-outcome',
+      date: 'invalid-date'
+    });
+    await vi.waitFor(() => expect(fixture.componentInstance.facade.requestState().status).toBe('ready'));
+    fixture.detectChanges();
+    expect(fixture.componentInstance.facade.filters()).toEqual({
+      courseId: '',
+      dateRange: 'all',
+      outcomeId: ''
+    });
+    expect(router.navigate).toHaveBeenCalled();
+    TestBed.resetTestingModule();
+    const deniedFixture = createScreen(unrelatedStudentId, {}, 'INSTRUCTOR');
+    await vi.waitFor(() =>
+      expect(deniedFixture.componentInstance.facade.requestState().status).toBe('unauthorized')
+    );
+    deniedFixture.detectChanges();
+    expect(deniedFixture.nativeElement.textContent).not.toContain(unrelatedStudentId);
+  });
+
+  it('clears sensitive data on service error and retries through the transport seam', async () => {
+    const fixture = createScreen();
+    const facade = fixture.componentInstance.facade;
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+    facade.setMockScenario({ outcome: 'service-error' });
+    facade.refresh();
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('error'));
+    expect(facade.studentContext()).toBeNull();
+    facade.setMockScenario({ outcome: 'success' });
+    facade.retry();
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+  });
+
+  it('denies unsupported account roles before transport', async () => {
+    const fixture = createScreen();
+    sessionStore.switchAccount(accountIdFor('PLATFORM_ADMINISTRATOR'));
+    fixture.detectChanges();
+    await vi.waitFor(() =>
+      expect(fixture.componentInstance.facade.requestState().status).toBe('unauthorized')
+    );
+    expect(fixture.componentInstance.facade.kpis().length).toBe(0);
+  });
+});
