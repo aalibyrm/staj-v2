@@ -9,8 +9,9 @@ import { type AuthSession, type RoleCode } from '../../../core/auth/authorizatio
 import { SessionStore } from '../../../core/auth/session.store';
 import { recommendLearningPathFromAttempts } from '../domain/recommendation-engine';
 import { selectOutcomeMastery } from '../domain/mastery-calculation';
-import { createMasteryAttempt, type MasteryAttempt, type MasteryOutcomeScore } from '../models/mastery.models';
-import type { ContentItem, ContentItemId, CourseId, LearningOutcome, LearningOutcomeId, LearningPathReason } from '../../learning-domain/models/learning-domain.models';
+import { type MasteryAttempt, type MasteryOutcomeScore } from '../models/mastery.models';
+import { ANALYTICS_PERFORMANCE_PERIODS, selectStudentPerformanceEvidence } from './analytics-performance.dataset';
+import type { ContentItem, ContentItemId, CourseId, LearningOutcome, LearningPathReason } from '../../learning-domain/models/learning-domain.models';
 import { createSeedData } from '../../adaptive-learning/data-access/seed-data.factory';
 import type { SeedCohort, SeedCourse, SeedStudent } from '../../adaptive-learning/models/seed-domain.models';
 
@@ -47,14 +48,7 @@ const DATE_OPTIONS: readonly AnalyticsFilterOption[] = Object.freeze([
   Object.freeze({ value: 'last-14-days', label: 'Last 14 days' }),
   Object.freeze({ value: 'last-30-days', label: 'Last 30 days' })
 ]);
-const PERIODS: readonly { readonly value: string; readonly label: string }[] = Object.freeze([
-  Object.freeze({ value: '2026-05-18', label: 'May 18' }),
-  Object.freeze({ value: '2026-05-24', label: 'May 24' }),
-  Object.freeze({ value: '2026-05-31', label: 'May 31' }),
-  Object.freeze({ value: '2026-06-07', label: 'Jun 7' }),
-  Object.freeze({ value: '2026-06-14', label: 'Jun 14' }),
-  Object.freeze({ value: '2026-06-18', label: 'Jun 18' })
-]);
+const PERIODS = ANALYTICS_PERFORMANCE_PERIODS;
 const HEATMAP_LEGEND: readonly HeatmapLegendItem[] = Object.freeze([
   Object.freeze({ band: 'developing', label: 'Developing', range: '0–39%', marker: 'D' }),
   Object.freeze({ band: 'approaching', label: 'Approaching', range: '40–59%', marker: 'A' }),
@@ -68,7 +62,6 @@ const percentLabel = (score: number | null): string => score === null ? 'No data
 const bandLabel = (score: MasteryOutcomeScore | undefined): string => score?.isMeasured ? `${score.band}` : 'No measurement';
 const dateAtStartOfDay = (value: string): number => Date.parse(`${value}T00:00:00.000Z`);
 
-const accountOffset = (studentId: string): number => studentId.endsWith('-02') ? 0.04 : studentId.endsWith('-03') ? -0.03 : 0;
 
 function studentScope(session: AuthSession | null, studentId: string): { readonly student: SeedStudent; readonly cohort: SeedCohort; readonly course: SeedCourse } | null {
   if (session === null || !roleSupportsAnalytics(session.account.roleCode) || studentId.trim() === '') return null;
@@ -89,15 +82,8 @@ function buildDataset(student: SeedStudent, cohort: SeedCohort, course: SeedCour
   const context: StudentAnalyticsContext = Object.freeze({ id: student.id, pseudonym: student.pseudonym, cohortId: cohort.id, cohortLabel: `${cohort.code} · ${cohort.name}`, courseId: course.id, courseLabel: `${course.code} · ${course.title}` });
   const outcomes = freezeArray(SEED.learningOutcomes.filter((item) => item.courseId === course.id).map((item) => Object.freeze({ id: item.id, courseId: item.courseId, code: item.code, title: item.title, description: item.description, level: item.level, status: 'published' as const, prerequisiteOutcomeIds: freezeArray(item.prerequisiteOutcomeIds), createdAt: item.createdAt, updatedAt: item.updatedAt, version: item.version })));
   const content = freezeArray(outcomes.map((outcome, index) => Object.freeze({ id: `ANALYTICS-CONTENT-${course.code}-${String(index + 1).padStart(2, '0')}` as ContentItemId, courseId: course.id as CourseId, title: `Practice ${outcome.code}: ${outcome.title}`, description: `Scoped practice for ${outcome.code}.`, learningOutcomeIds: freezeArray([outcome.id]), level: outcome.level, durationMinutes: 10 + index * 3, format: index % 2 === 0 ? 'exercise' as const : 'article' as const, accessConditions: Object.freeze({ visibility: 'enrolled' as const, requiresEnrollment: true }), status: 'published' as const, createdAt: course.createdAt, updatedAt: course.updatedAt, version: course.version })));
-  const baseline = [0.28, 0.36, 0.44, 0.55, 0.63, 0.71] as const;
-  const attempts: MasteryAttempt[] = [];
-  for (const [outcomeIndex, outcome] of outcomes.entries()) {
-    for (const [periodIndex, period] of PERIODS.entries()) {
-      const fraction = Math.min(1, Math.max(0, (baseline[periodIndex] ?? 0.5) + outcomeIndex * 0.025 + accountOffset(student.id)));
-      attempts.push(createMasteryAttempt({ outcomeId: outcome.id, questionId: `ANALYTICS-Q-${String(outcomeIndex + 1).padStart(2, '0')}-${String(periodIndex + 1).padStart(2, '0')}`, difficulty: periodIndex % 3 === 0 ? 'easy' : periodIndex % 3 === 1 ? 'medium' : 'hard', earnedFraction: fraction, answeredAt: `${period.value}T10:00:00.000Z` }));
-    }
-  }
-  return Object.freeze({ context, student, cohort, course, outcomes, content, attempts: freezeArray(attempts), completedContentIds: freezeArray([content[0]?.id].filter((value): value is ContentItemId => value !== undefined)), lockedContentIds: freezeArray([content[1]?.id].filter((value): value is ContentItemId => value !== undefined)) });
+  const attempts = freezeArray(selectStudentPerformanceEvidence(student.id).map((record) => record.attempt));
+  return Object.freeze({ context, student, cohort, course, outcomes, content, attempts, completedContentIds: freezeArray([content[0]?.id].filter((value): value is ContentItemId => value !== undefined)), lockedContentIds: freezeArray([content[1]?.id].filter((value): value is ContentItemId => value !== undefined)) });
 }
 
 const copyScenario = (controls: StudentAnalyticsScenarioControls): StudentAnalyticsScenarioControls => Object.freeze({ ...DEFAULT_MOCK_SCENARIO, ...controls });

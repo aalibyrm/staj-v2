@@ -1,4 +1,4 @@
-import { TestBed } from '@angular/core/testing';
+import { DeferBlockBehavior, DeferBlockState, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
@@ -42,6 +42,7 @@ describe('StudentAnalyticsComponent', () => {
   ) {
     router = { navigate: vi.fn().mockResolvedValue(true) };
     TestBed.configureTestingModule({
+      deferBlockBehavior: DeferBlockBehavior.Manual,
       imports: [StudentAnalyticsComponent],
       providers: [
         { provide: ActivatedRoute, useValue: routeFor(studentId, query) },
@@ -101,6 +102,24 @@ describe('StudentAnalyticsComponent', () => {
     expect(table.textContent).toContain('Outcome mastery by period');
     expect(fixture.nativeElement.textContent).toContain('Explainable');
   });
+  it('renders the trend only after a manual defer trigger and keeps its table alternative', async () => {
+    const fixture = createScreen();
+    await vi.waitFor(() => expect(fixture.componentInstance.facade.requestState().status).toBe('ready'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.chart-placeholder')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-mastery-trend')).toBeNull();
+
+    const deferBlocks = await fixture.getDeferBlocks();
+    expect(deferBlocks).toHaveLength(1);
+    const trendBlock = deferBlocks[0];
+    expect(trendBlock).toBeDefined();
+    if (trendBlock === undefined) return;
+    await trendBlock.render(DeferBlockState.Complete);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-mastery-trend')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-mastery-trend table')).not.toBeNull();
+  });
+
 
   it('canonicalizes URL filters while preserving the route scope and denies unrelated students', async () => {
     const fixture = createScreen(ownStudentId, {

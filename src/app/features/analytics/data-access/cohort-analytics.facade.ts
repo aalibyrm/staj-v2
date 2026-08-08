@@ -9,7 +9,8 @@ import { type AuthSession, type RoleCode } from '../../../core/auth/authorizatio
 import { SessionStore } from '../../../core/auth/session.store';
 import { selectCohortPrivacy, COHORT_PRIVACY_MINIMUM } from '../domain/cohort-privacy';
 import { selectOutcomeMastery } from '../domain/mastery-calculation';
-import { createMasteryAttempt, type MasteryAttempt, type MasteryBand } from '../models/mastery.models';
+import { type MasteryAttempt, type MasteryBand } from '../models/mastery.models';
+import { selectCohortPerformanceEvidence } from './analytics-performance.dataset';
 import { createSeedData } from '../../adaptive-learning/data-access/seed-data.factory';
 import type { SeedCohort, SeedCourse, SeedStudent } from '../../adaptive-learning/models/seed-domain.models';
 import type { LearningOutcome } from '../../learning-domain/models/learning-domain.models';
@@ -41,8 +42,6 @@ const DATE_OPTIONS: readonly CohortAnalyticsFilterOption[] = Object.freeze([
   Object.freeze({ value: 'last-14-days', label: 'Last 14 days' }),
   Object.freeze({ value: 'last-30-days', label: 'Last 30 days' })
 ]);
-const PERIODS = Object.freeze(['2026-05-18', '2026-05-24', '2026-05-31', '2026-06-07', '2026-06-14', '2026-06-18']);
-const BASELINE = Object.freeze([0.28, 0.36, 0.44, 0.55, 0.63, 0.71]);
 const freezeArray = <T>(items: readonly T[]): readonly T[] => Object.freeze([...items]);
 const percent = (score: number | null): string => score === null ? 'No data' : `${Math.round(score * 100)}%`;
 const bandMarker = (band: MasteryBand): string => band === 'advanced' ? '✓' : band === 'proficient' ? 'P' : band === 'approaching' ? 'A' : band === 'developing' ? 'D' : '?';
@@ -69,12 +68,12 @@ const entriesFor = (cohorts: readonly SeedCohort[]): readonly StudentEntry[] => 
   const course = courseFor(cohort);
   if (course === undefined) return [];
   const outcomes = outcomesFor(course);
+  const evidence = selectCohortPerformanceEvidence(cohort.id);
   return cohort.studentIds.flatMap((studentId) => {
     const student = SEED.students.find((candidate) => candidate.id === studentId);
     if (student === undefined) return [];
-    const studentOffset = student.id.endsWith('-02') ? 0.04 : student.id.endsWith('-03') ? -0.03 : 0;
-    const attempts = outcomes.flatMap((outcome, outcomeIndex) => PERIODS.map((period, periodIndex) => createMasteryAttempt({ outcomeId: outcome.id, questionId: `COHORT-${outcomeIndex + 1}-${periodIndex + 1}-${student.id}`, difficulty: periodIndex % 3 === 0 ? 'easy' : periodIndex % 3 === 1 ? 'medium' : 'hard', earnedFraction: Math.min(1, Math.max(0, (BASELINE[periodIndex] ?? 0.5) + outcomeIndex * 0.025 + studentOffset)), answeredAt: `${period}T10:00:00.000Z` })));
-    return [Object.freeze({ student, cohort, course, outcomes, attempts: freezeArray(attempts) })];
+    const attempts = freezeArray(evidence.filter((record) => record.studentId === student.id).map((record) => record.attempt));
+    return [Object.freeze({ student, cohort, course, outcomes, attempts })];
   });
 }));
 
