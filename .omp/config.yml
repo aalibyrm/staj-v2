@@ -1,22 +1,20 @@
-# Claude-first budget profile: Opus 5 orchestrates, Sonnet 5 builds, Haiku handles tiny work.
+# Low-budget default: Sol orchestrates; one Luna Max worker executes.
 modelRoles:
-  default: anthropic/claude-opus-5:medium
-  plan: anthropic/claude-opus-5:medium
-  slow: anthropic/claude-opus-5:high
-  task: anthropic/claude-sonnet-5:high
-  claude_worker: anthropic/claude-sonnet-5:high
-  claude_reviewer: anthropic/claude-opus-5:high
-  smol: anthropic/claude-haiku-4-5:low
-  tiny: anthropic/claude-haiku-4-5:low
-  commit: anthropic/claude-sonnet-5:low
+  default: openai-codex/gpt-5.6-sol:medium
+  plan: openai-codex/gpt-5.6-sol:medium
+  slow: openai-codex/gpt-5.6-sol:medium
+  task: openai-codex/gpt-5.6-luna:max
+  luna_worker: openai-codex/gpt-5.6-luna:max
+  smol: openai-codex/gpt-5.6-luna:low
+  tiny: openai-codex/gpt-5.6-luna:low
+  commit: openai-codex/gpt-5.6-luna:low
 
 modelProviderOrder:
-  - anthropic
+  - openai-codex
 
 enabledModels:
-  - anthropic/claude-opus-5
-  - anthropic/claude-sonnet-5
-  - anthropic/claude-haiku-4-5
+  - openai-codex/gpt-5.6-sol
+  - openai-codex/gpt-5.6-luna
 
 includeModelInPrompt: true
 
@@ -28,8 +26,8 @@ task:
   maxEffort: max
   showResolvedModelBadge: true
   agentModelOverrides:
-    adaptive-builder: "@claude_worker"
-    adaptive-auditor: "@claude_reviewer"
+    adaptive-builder: "@luna_worker"
+    adaptive-auditor: "@luna_worker"
     adaptive-committer: "@commit"
   isolation:
     mode: none
