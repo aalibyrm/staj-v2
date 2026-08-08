@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { firstValueFrom } from 'rxjs';
 
 import {
   DATA_SCOPE_KINDS,
@@ -13,6 +14,7 @@ import { SessionStore } from '../../../core/auth/session.store';
 import { createSeedData } from './seed-data.factory';
 import { ScopedDataFacade } from './scoped-data.facade';
 import { DataScopeDashboardComponent } from '../components/data-scope-dashboard.component';
+import { RecommendationReasonCardComponent } from '../components/recommendation-reason-card.component';
 
 type DemonstrationAccount = Extract<
   RoleCode,
@@ -145,50 +147,59 @@ describe('ScopedDataFacade', () => {
 });
 
 describe('DataScopeDashboardComponent', () => {
-  it('switches real accounts without rendering denied ids or primary text', async () => {
+  it('renders the scoped dashboard hierarchy, accessible progress summary, and engine reason output', async () => {
     const { fixture, sessionStore, facade } = await createDashboard();
+    sessionStore.signIn(accountFor('INSTRUCTOR').id);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+    fixture.detectChanges();
     const element: HTMLElement = fixture.nativeElement;
+    expect(element.querySelector('h1')?.textContent).toContain('Learning dashboard');
+    expect(element.querySelector('.filter-row')).not.toBeNull();
+    expect(element.querySelector('.kpi-grid')).not.toBeNull();
+    expect(element.querySelector('.progress-table')).not.toBeNull();
+    expect(element.querySelector('.recommendation-panel')).not.toBeNull();
+    expect(element.querySelector('.outcome-panel')).not.toBeNull();
+    expect(element.querySelector('.upcoming-panel')).not.toBeNull();
+    expect(element.querySelector('.activity-panel')).not.toBeNull();
+    expect(element.querySelectorAll('app-recommendation-reason-card').length).toBeGreaterThan(0);
+    expect(element.textContent).toContain('weak-outcome');
+    expect(element.textContent).toContain('Prioritize');
+    expect(element.textContent).toContain('Relevant factors');
+    expect(facade.recommendations().every((recommendation) => Object.isFrozen(recommendation))).toBe(true);
+    expect(Object.isFrozen(facade.recommendations())).toBe(true);
+    expect(element.querySelector('.progress-table caption')?.textContent).toContain('Outcome mastery');
+  });
+
+  it('keeps exact role and data-scope isolation across account switching', async () => {
+    const { fixture, sessionStore, facade } = await createDashboard();
     const seed = createSeedData();
-
     for (const role of ['STUDENT', 'INSTRUCTOR', 'PROGRAM_MANAGER', 'OBSERVER'] as const) {
-      const account = accountFor(role);
-      sessionStore.switchAccount(account.id);
+      sessionStore.switchAccount(accountFor(role).id);
       fixture.detectChanges();
-
-      const rows = element.querySelectorAll('.record-row');
-      expect(rows).toHaveLength(EXPECTED_IDS[role].length);
-      expect(element.querySelector('.scope-summary')?.getAttribute('aria-live')).toBe('polite');
-      expect(element.textContent).toContain(account.displayLabel);
-      expect(element.textContent).toContain(roleLabel(role));
-
-      const serialized = element.outerHTML;
+      await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+      fixture.detectChanges();
       const allowedIds = new Set(EXPECTED_IDS[role]);
-      const allowedPresentation = facade.visibleRecords().flatMap((record) => [
-        record.primaryText,
-        record.secondaryContext
-      ]);
-      const hasAllowedPresentation = (token: string): boolean =>
-        allowedPresentation.some((field) => field.includes(token));
+      const relatedCourseIds = new Set(
+        seed.courses
+          .filter((course) => allowedIds.has(course.id) || seed.cohorts.some((cohort) => allowedIds.has(cohort.id) && cohort.courseId === course.id))
+          .map((course) => course.id)
+      );
+      const allowedPresentation = facade.visibleRecords().flatMap((record) => [record.primaryText, record.secondaryContext]);
+      const hasAllowedPresentation = (token: string): boolean => allowedPresentation.some((field) => field.includes(token));
+      const serialized = fixture.nativeElement.outerHTML;
       for (const course of seed.courses) {
-        if (!allowedIds.has(course.id)) {
+        if (!relatedCourseIds.has(course.id)) {
           expect(serialized).not.toContain(course.id);
-          if (!hasAllowedPresentation(course.code)) {
-            expect(serialized).not.toContain(course.code);
-          }
-          if (!hasAllowedPresentation(course.title)) {
-            expect(serialized).not.toContain(course.title);
-          }
+          if (!hasAllowedPresentation(course.code)) expect(serialized).not.toContain(course.code);
+          if (!hasAllowedPresentation(course.title)) expect(serialized).not.toContain(course.title);
         }
       }
       for (const cohort of seed.cohorts) {
         if (!allowedIds.has(cohort.id)) {
           expect(serialized).not.toContain(cohort.id);
-          if (!hasAllowedPresentation(cohort.code)) {
-            expect(serialized).not.toContain(cohort.code);
-          }
-          if (!hasAllowedPresentation(cohort.name)) {
-            expect(serialized).not.toContain(cohort.name);
-          }
+          if (!hasAllowedPresentation(cohort.code)) expect(serialized).not.toContain(cohort.code);
+          if (!hasAllowedPresentation(cohort.name)) expect(serialized).not.toContain(cohort.name);
         }
       }
       for (const student of seed.students) {
@@ -197,39 +208,92 @@ describe('DataScopeDashboardComponent', () => {
           expect(serialized).not.toContain(student.pseudonym);
         }
       }
-
-      const accessLabels = Array.from(element.querySelectorAll('.record-access')).map((node) =>
-        node.textContent?.trim()
-      );
-      expect(accessLabels).toEqual(
-        Array.from({ length: EXPECTED_IDS[role].length }, () =>
-          role === 'OBSERVER' ? 'Read only' : 'Granted scope'
-        )
-      );
+      if (role === 'STUDENT') {
+        const authorizedCohort = seed.cohorts.find((cohort) => allowedIds.has(cohort.id));
+        const sibling = seed.cohorts.find((cohort) => authorizedCohort !== undefined && cohort.courseId === authorizedCohort.courseId && !allowedIds.has(cohort.id));
+        if (sibling !== undefined) {
+          expect(serialized).not.toContain(sibling.id);
+          expect(serialized).not.toContain(sibling.code);
+          expect(serialized).not.toContain(sibling.name);
+        }
+      }
+      expect(facade.visibleRecords().map((record) => record.id)).toEqual(EXPECTED_IDS[role]);
+      expect(facade.visibleRecords().every((record) => record.accessMode === (role === 'OBSERVER' ? 'read-only' : 'granted'))).toBe(true);
     }
   });
 
-  it('renders truthful empty state for unauthenticated and administrator roles while exposing the measurement grant', async () => {
+  it('exposes empty authorized scope distinctly from unauthenticated and denied scope', async () => {
     const { fixture, sessionStore, facade } = await createDashboard();
-    const element: HTMLElement = fixture.nativeElement;
-
-    expect(facade.isAuthenticated()).toBe(false);
-    expect(element.querySelectorAll('.record-row')).toHaveLength(0);
-    expect(element.textContent).toContain('Select an account to view records');
-    expect(element.textContent).toContain('Choose an authenticated demo account');
-
-    sessionStore.signIn(accountFor('MEASUREMENT_SPECIALIST').id);
-    fixture.detectChanges();
-    expect(facade.isAuthenticated()).toBe(true);
-    expect(element.querySelectorAll('.record-row')).toHaveLength(1);
-    expect(element.textContent).toContain('Foundations of Data Literacy');
-    expect(element.textContent).not.toContain('No authorized records');
-
+    expect(facade.requestState().status).toBe('unauthorized');
     sessionStore.signIn(accountFor('PLATFORM_ADMINISTRATOR').id);
     fixture.detectChanges();
-    expect(element.querySelectorAll('.record-row')).toHaveLength(0);
-    expect(element.querySelector('app-request-state')).not.toBeNull();
-    expect(element.textContent).toContain('No authorized records');
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('unauthorized'));
+    sessionStore.signIn(accountFor('STUDENT').id);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+    facade.setMockScenario({ outcome: 'unauthorized' });
+    await expect(firstValueFrom(facade.load())).rejects.toBeTruthy();
+    expect(facade.requestState().status).toBe('unauthorized');
+    facade.setMockScenario({ emptyAuthorizedScope: true });
+    await firstValueFrom(facade.load());
+    fixture.detectChanges();
+    expect(facade.requestState().status).toBe('empty');
+    expect(fixture.nativeElement.textContent).toContain('No learning data in this scope');
+  });
+
+  it('keeps loading and slow context, retries service errors, and preserves successful widgets on partial failure', async () => {
+    const { fixture, sessionStore, facade } = await createDashboard();
+    sessionStore.signIn(accountFor('INSTRUCTOR').id);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(facade.requestState().status).toBe('ready'));
+    facade.setMockScenario({ latencyMs: 500 });
+    const slowLoad = facade.load();
+    expect(facade.requestState().status).toBe('loading');
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(facade.requestState().status).toBe('slow');
+    await firstValueFrom(slowLoad);
+    expect(facade.requestState().status).toBe('ready');
+    facade.setMockScenario({ outcome: 'service-error' });
+    await expect(firstValueFrom(facade.load())).rejects.toBeTruthy();
+    expect(facade.requestState().status).toBe('error');
+    facade.resetMockScenario();
+    await firstValueFrom(facade.load());
+    expect(facade.requestState().status).toBe('ready');
+    facade.setMockScenario({ widgetFailures: ['progress'] });
+    await firstValueFrom(facade.load());
+    fixture.detectChanges();
+    expect(facade.widgetStatus('progress')).toBe('error');
+    expect(facade.kpis().length).toBeGreaterThan(0);
+    expect(facade.recommendations().length).toBeGreaterThan(0);
+    facade.retryWidget('progress');
+    expect(facade.widgetStatus('progress')).toBe('ready');
+  });
+});
+
+describe('RecommendationReasonCardComponent', () => {
+  it('renders input-driven identity, machine code, explanation, and factor list without transport access', async () => {
+    await TestBed.configureTestingModule({ imports: [RecommendationReasonCardComponent] }).compileComponents();
+    const fixture = TestBed.createComponent(RecommendationReasonCardComponent);
+    fixture.componentRef.setInput('recommendation', {
+      contentId: 'content-input-test',
+      contentTitle: 'Input-driven practice',
+      contentFormat: 'exercise',
+      order: 2,
+      reason: {
+        code: 'weak-outcome',
+        summary: 'Prioritize OUTCOME-01',
+        detail: 'The measured mastery is below the practice threshold.',
+        factors: Object.freeze({ mastery: 0.32, outcomeCode: 'OUTCOME-01', masteryState: 'measured' })
+      }
+    });
+    fixture.detectChanges();
+    const element: HTMLElement = fixture.nativeElement;
+    expect(element.querySelector('h3')?.textContent).toContain('Input-driven practice');
+    expect(element.textContent).toContain('weak-outcome');
+    expect(element.textContent).toContain('Prioritize OUTCOME-01');
+    expect(element.textContent).toContain('The measured mastery');
+    expect(element.querySelectorAll('.factor-list li')).toHaveLength(3);
+    expect(element.querySelector('[aria-labelledby]')).not.toBeNull();
   });
 });
 
