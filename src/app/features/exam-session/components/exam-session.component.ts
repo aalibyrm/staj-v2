@@ -94,6 +94,7 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
             aria-live="assertive"
             aria-atomic="true"
             aria-labelledby="draft-conflict-heading"
+            aria-describedby="draft-conflict-description"
           >
             <div class="draft-conflict-heading">
               <div>
@@ -104,7 +105,7 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
                 <span class="draft-conflict-status">Resolving conflict…</span>
               }
             </div>
-            <p>Choose which answer to keep. Neither draft is replaced until you choose.</p>
+            <p id="draft-conflict-description">Choose which answer to keep. Neither draft is replaced until you choose.</p>
             <dl class="draft-conflict-choices">
               <div>
                 <dt>Your local answer</dt>
@@ -155,7 +156,6 @@ import type { AnswerDraft, ExamQuestion } from '../models/answer-draft.models';
               id="question-navigator"
               class="navigator-panel"
               [class.is-collapsed]="!navigatorOpen()"
-              [attr.aria-hidden]="!navigatorOpen() ? 'true' : null"
               aria-label="Question navigator"
               tabindex="-1"
               (keydown)="onNavigatorKeydown($event)"

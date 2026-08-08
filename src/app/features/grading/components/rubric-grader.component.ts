@@ -252,7 +252,7 @@ const WORKFLOW_STATUS_LABELS: Readonly<Record<GradingWorkflowStatus, string>> = 
               <div class="review-actions">
                 <p class="live-status" aria-live="polite">{{ liveStatus() }}</p>
                 <button type="submit" class="primary-button">Review rubric</button>
-                <button #applyScoreChangeTrigger type="button" class="secondary-action" [disabled]="!canApplyScoreChange()" (click)="openScoreChangeConfirmation()">Apply score change</button>
+                <button #applyScoreChangeTrigger type="button" class="secondary-action" [disabled]="!canApplyScoreChange()" aria-haspopup="dialog" [attr.aria-expanded]="scoreChangeConfirmationOpen()" (click)="openScoreChangeConfirmation()">Apply score change</button>
               </div>
 
               @if (facade.lastNotification(); as notification) {

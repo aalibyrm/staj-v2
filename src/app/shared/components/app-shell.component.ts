@@ -1033,12 +1033,32 @@ export class AppShellComponent implements AfterViewChecked {
   }
 
   onDrawerKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.closeDrawer();
       return;
     }
 
-    event.preventDefault();
-    this.closeDrawer();
+    if (event.key !== 'Tab' || !this.drawerOpenState() || this.drawer === undefined) {
+      return;
+    }
+
+    const focusable = Array.from(this.drawer.nativeElement.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ));
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   onAccountChange(event: Event): void {

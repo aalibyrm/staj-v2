@@ -188,6 +188,8 @@ Required final gates:
 
 Keyboard, focus, ARIA, non-color state, dialog focus return, timer/autosave announcements. Verify chart/heatmap alternatives and exam-session live regions.
 
+Status: `COMPLETE` — shared request states announce atomically; narrow navigation and audit detail contain keyboard focus and restore it on Escape; grading exposes dialog trigger state and focus return; exam timer, autosave, conflict, navigator, and live status retain meaningful ARIA semantics; analytics heatmap/trend alternatives expose captions, scoped headers, numeric values, and text states. The focused gate passed 72/72 tests across 6 files, the complete suite passed 641/641 tests across 55 files, and `npx ng build` passed with a 350.45 kB initial bundle and only existing component-style budget warnings. Live checks at 1440x900 and 390x844 passed without horizontal overflow or console/page errors.
+
 ### P08-W04 - Performance sweep
 
 Lazy routes, trackBy, memoized selectors, virtual scroll where needed, lazy charts, large graph/list checks.

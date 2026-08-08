@@ -45,7 +45,7 @@ const REQUEST_STATE_MAP: Readonly<Record<string, RequestStateKind>> = Object.fre
   providers: [ListQueryStateFacade, AuditLogFacade],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main class="audit-log" aria-labelledby="audit-log-heading">
+    <main class="audit-log" aria-labelledby="audit-log-heading" (keydown)="onDetailKeydown($event)">
       <header class="page-heading">
         <div>
           <span class="eyebrow">Compliance</span>
@@ -259,6 +259,33 @@ export class AuditLogComponent {
   closeDetail(): void {
     this.facade.clearSelection();
     this.lastTrigger?.focus();
+  }
+  onDetailKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Tab' || !(event.currentTarget instanceof HTMLElement)) {
+      return;
+    }
+
+    const detail = event.currentTarget.querySelector<HTMLElement>('.audit-detail');
+    if (detail === null) {
+      return;
+    }
+
+    const focusable = Array.from(detail.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    ));
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   exportVisiblePage(): void {

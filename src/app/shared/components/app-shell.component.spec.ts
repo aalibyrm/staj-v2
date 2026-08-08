@@ -208,4 +208,25 @@ describe('AppShellComponent', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(trigger);
   });
+  it('keeps Tab focus inside the open drawer and wraps at the last navigation link', async () => {
+    const { fixture, router, sessionStore } = await createShell();
+    sessionStore.signIn('ACCOUNT-STUDENT-001');
+    await navigate(router, fixture, '/learning/dashboard');
+
+    const element = fixture.nativeElement as HTMLElement;
+    const trigger = element.querySelector<HTMLButtonElement>('.menu-trigger');
+    const drawer = element.querySelector<HTMLElement>('#app-navigation');
+    const links = Array.from(element.querySelectorAll<HTMLAnchorElement>('.navigation-link'));
+    if (trigger === null || drawer === null || links.length < 2) {
+      throw new Error('Drawer navigation links were not rendered.');
+    }
+
+    trigger.click();
+    fixture.detectChanges();
+    links.at(-1)?.focus();
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    drawer.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(links[0]);
+  });
 });

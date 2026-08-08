@@ -134,7 +134,11 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
     expect(element.textContent?.toLowerCase()).not.toContain('solution');
     expect(element.textContent?.toLowerCase()).not.toContain('correct answer');
     expect(element.querySelector('[aria-live="polite"]')).not.toBeNull();
+    expect(element.querySelector('.timer-status')?.getAttribute('aria-live')).toBe('polite');
+    expect(element.querySelector('.timer-status')?.getAttribute('aria-atomic')).toBe('true');
+    expect(element.querySelector('.autosave-indicator')?.getAttribute('aria-atomic')).toBe('true');
     expect(element.querySelector('.navigator-trigger')?.getAttribute('aria-controls')).toBe('question-navigator');
+    expect(element.querySelector('.navigator-panel')?.getAttribute('aria-hidden')).toBeNull();
     expect(element.querySelector('.navigator-key')?.textContent).toContain('Answered');
     expect(element.querySelector('.navigator-key')?.textContent).toContain('Unanswered');
     expect(element.querySelector('.navigator-key')?.textContent).toContain('Flagged');
@@ -806,6 +810,7 @@ describe('ExamSessionComponent and ExamSessionFacade', () => {
       const region = fixture.nativeElement.querySelector('.draft-conflict') as HTMLElement;
       expect(region.getAttribute('role')).toBe('alert');
       expect(region.getAttribute('aria-live')).toBe('assertive');
+      expect(region.getAttribute('aria-describedby')).toBe('draft-conflict-description');
       expect(region.textContent).toContain('Your local answer');
       expect(region.textContent).toContain('Server answer');
       expect(region.querySelector('button[aria-label="Use server answer"]') ?? region.textContent).toContain('Use server answer');

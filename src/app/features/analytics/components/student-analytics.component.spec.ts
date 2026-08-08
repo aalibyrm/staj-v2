@@ -105,6 +105,11 @@ describe('StudentAnalyticsComponent', () => {
     const table = fixture.nativeElement.querySelector('app-mastery-heatmap table');
     expect(table).not.toBeNull();
     expect(table.textContent).toContain('Outcome mastery by period');
+    const heatmapTable = fixture.nativeElement.querySelector('app-mastery-heatmap table') as HTMLTableElement;
+    expect(heatmapTable.querySelector('caption')?.textContent).toContain('percentage and a text status');
+    expect(heatmapTable.querySelectorAll('thead th[scope="col"]').length).toBeGreaterThan(1);
+    expect(heatmapTable.querySelectorAll('tbody th[scope="row"]').length).toBeGreaterThan(0);
+    expect(Array.from(heatmapTable.querySelectorAll('tbody td')).some((cell) => cell.textContent?.trim().length > 0)).toBe(true);
     expect(fixture.nativeElement.textContent).toContain('Explainable');
   });
   it('renders the trend only after a manual defer trigger and keeps its table alternative', async () => {
@@ -123,6 +128,15 @@ describe('StudentAnalyticsComponent', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('app-mastery-trend')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('app-mastery-trend table')).not.toBeNull();
+    const trendTable = fixture.nativeElement.querySelector('app-mastery-trend table') as HTMLTableElement;
+    expect(trendTable.querySelector('caption')?.textContent).toContain('numeric values and status labels');
+    expect(Array.from(trendTable.querySelectorAll('thead th')).map((header) => header.textContent?.trim())).toEqual([
+      'Period',
+      'Mastery',
+      'Status',
+      'Attempts'
+    ]);
+    expect(trendTable.querySelectorAll('tbody th[scope="row"]').length).toBeGreaterThan(0);
   });
 
 

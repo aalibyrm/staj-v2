@@ -443,6 +443,17 @@ describe('RubricGraderComponent', () => {
     expect(timelineItem?.textContent).toContain(instructorAccount.id);
     expect(timelineItem?.textContent).toContain('Evaluation 2');
     expect(document.activeElement).toBe(applyButton);
+    expect(applyButton?.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(applyButton?.getAttribute('aria-expanded')).toBe('false');
+    applyButton?.click();
+    harness.detectChanges();
+    await harness.fixture.whenRenderingDone();
+    const reopenedPanel = element.querySelector<HTMLElement>('.score-change-confirmation');
+    expect(reopenedPanel).not.toBeNull();
+    reopenedPanel?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    harness.detectChanges();
+    expect(element.querySelector('.score-change-confirmation')).toBeNull();
+    expect(document.activeElement).toBe(applyButton);
   });
 
   it('shows the pending marker while saving, then the assertive failure alert with a retry action that reopens the confirmation dialog', async () => {

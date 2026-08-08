@@ -77,6 +77,7 @@ describe('RequestStateComponent', () => {
       expect(element.querySelector('h2')?.textContent?.trim()).toBe(expected.title);
       expect(element.querySelector('p')?.textContent?.trim()).toBe(expected.message);
       expect(section.getAttribute('role')).toBe(expected.role);
+      expect(section.getAttribute('aria-atomic')).toBe('true');
       const retry = element.querySelector('button.retry-action') as HTMLButtonElement | null;
       expect(retry === null).toBe(!expected.retryable);
       if (retry !== null) expect(retry.textContent?.trim()).toBe('Try again');

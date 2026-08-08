@@ -42,6 +42,10 @@ describe('AuditLogComponent', () => {
     expect(element.querySelector('h1')?.textContent?.trim()).toBe('Audit log');
     expect(element.querySelectorAll('.audit-table tbody tr').length).toBeGreaterThan(0);
     expect(element.querySelector('.primary-action')?.textContent).toContain('Export');
+    const table = element.querySelector<HTMLTableElement>('.audit-table');
+    expect(table?.querySelector('caption')?.textContent).toContain('Audit records');
+    expect(table?.querySelectorAll('thead th[scope="col"]')).toHaveLength(6);
+    expect(Array.from(table?.querySelectorAll('.status-chip') ?? []).every((chip) => (chip.textContent ?? '').trim().length > 0)).toBe(true);
   });
 
   it('round-trips search, filters, and sort through the URL query parameters and filters the visible rows', async () => {
@@ -92,6 +96,13 @@ describe('AuditLogComponent', () => {
     await vi.waitFor(() => {
       expect(document.activeElement).toBe(panel);
     });
+    const closeButton = panel?.querySelector<HTMLButtonElement>('.close-action');
+    expect(closeButton).not.toBeNull();
+    closeButton?.focus();
+    const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    closeButton?.dispatchEvent(tabEvent);
+    expect(tabEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(closeButton);
 
     panel!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     harness.detectChanges();

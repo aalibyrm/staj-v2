@@ -54,6 +54,7 @@ const REQUEST_STATE_COPY: Readonly<Record<RequestStateKind, RequestStateCopy>> =
       [class.request-state--assertive]="isAssertive()"
       [attr.aria-busy]="state() === 'loading' ? 'true' : null"
       [attr.aria-live]="isAssertive() ? 'assertive' : 'polite'"
+      [attr.aria-atomic]="'true'"
       [attr.role]="isAssertive() ? 'alert' : 'status'"
       [attr.aria-labelledby]="titleId"
       [attr.aria-describedby]="messageId"
