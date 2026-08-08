@@ -47,6 +47,10 @@ const loadCohortAnalytics = () =>
   import('../analytics/components/cohort-analytics.component').then(
     ({ CohortAnalyticsComponent }) => CohortAnalyticsComponent
   );
+const loadItemAnalysis = () =>
+  import('../analytics/components/item-analysis.component').then(
+    ({ ItemAnalysisComponent }) => ItemAnalysisComponent
+  );
 
 const loadAuditLog = () =>
   import('../audit/components/audit-log.component').then(
@@ -234,10 +238,19 @@ export const adaptiveLearningRoutes: Routes = [
     },
     loadComponent: loadCohortAnalytics
   },
-  placeholderRoute('item-analysis', 'Item analysis', [
-    ROUTE_CAPABILITIES.instructorTeaching,
-    ROUTE_CAPABILITIES.measurementWorkspace
-  ]),
+  {
+    path: 'item-analysis',
+    pathMatch: 'full',
+    canMatch: [authGuard],
+    data: {
+      title: 'Item analysis',
+      [ROUTE_CAPABILITIES_DATA_KEY]: [
+        ROUTE_CAPABILITIES.instructorTeaching,
+        ROUTE_CAPABILITIES.measurementWorkspace
+      ]
+    },
+    loadComponent: loadItemAnalysis
+  },
   {
     path: 'audit-log',
     pathMatch: 'full',

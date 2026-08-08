@@ -21,6 +21,7 @@ import { adaptiveLearningRoutes } from '../../features/adaptive-learning/adaptiv
 import { ExamBuilderComponent } from '../../features/exam-builder/components/exam-builder.component';
 import { RubricGraderComponent } from '../../features/grading/components/rubric-grader.component';
 import { CohortAnalyticsComponent } from '../../features/analytics/components/cohort-analytics.component';
+import { ItemAnalysisComponent } from '../../features/analytics/components/item-analysis.component';
 
 
 @Component({
@@ -154,7 +155,7 @@ describe('application routes', () => {
       expect(router.url).toBe(url);
       expect(
         harness.routeNativeElement?.querySelector(
-          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"], main[aria-labelledby="exam-builder-heading"], main[aria-labelledby="rubric-grader-heading"], main[aria-labelledby="audit-log-heading"], main[aria-labelledby="student-analytics-heading"], main[aria-labelledby="cohort-analytics-heading"]'
+          'section[aria-labelledby="route-placeholder-heading"], section[aria-labelledby="learning-dashboard-heading"], section[aria-labelledby="outcome-list-editor-heading"], section[aria-labelledby="outcome-map-heading"], section[aria-labelledby="question-bank-heading"], main[aria-labelledby="catalog-heading"], main[aria-labelledby="exam-builder-heading"], main[aria-labelledby="rubric-grader-heading"], main[aria-labelledby="audit-log-heading"], main[aria-labelledby="student-analytics-heading"], main[aria-labelledby="cohort-analytics-heading"], main[aria-labelledby="item-analysis-heading"]'
         )
       ).not.toBeNull();
       expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe(
@@ -174,6 +175,33 @@ describe('application routes', () => {
       ROUTE_CAPABILITIES.observerReports
     ]);
     expect(await route?.loadComponent?.()).toBe(CohortAnalyticsComponent);
+  });
+  it('lazy-loads item analysis behind exactly the instructor and measurement capabilities and denies other roles', async () => {
+    const itemRoute = adaptiveLearningRoutes.find((route) => route.path === 'item-analysis');
+    expect(itemRoute?.pathMatch).toBe('full');
+    expect(itemRoute?.canMatch).toContain(authGuard);
+    expect(itemRoute?.component).toBeUndefined();
+    expect(itemRoute?.data?.[ROUTE_CAPABILITIES_DATA_KEY]).toEqual([
+      ROUTE_CAPABILITIES.instructorTeaching,
+      ROUTE_CAPABILITIES.measurementWorkspace
+    ]);
+    expect(await itemRoute?.loadComponent?.()).toBe(ItemAnalysisComponent);
+
+    const harness = await RouterTestingHarness.create();
+    const router = TestBed.inject(Router);
+    const sessionStore = TestBed.inject(SessionStore);
+    for (const role of ['INSTRUCTOR', 'MEASUREMENT_SPECIALIST'] as const) {
+      sessionStore.signIn(accountIdFor(role));
+      await harness.navigateByUrl('/item-analysis');
+      expect(router.url).toBe('/item-analysis');
+      expect(harness.routeNativeElement?.querySelector('#item-analysis-heading')?.textContent?.trim()).toBe('Item analysis');
+    }
+    for (const role of ['STUDENT', 'PROGRAM_MANAGER', 'OBSERVER', 'PLATFORM_ADMINISTRATOR'] as const) {
+      sessionStore.signIn(accountIdFor(role));
+      await harness.navigateByUrl('/unauthorized');
+      await harness.navigateByUrl('/item-analysis');
+      expect(router.url).toBe(`/unauthorized?returnUrl=%2Fitem-analysis`);
+    }
   });
   it('lazy-loads the guarded concrete question bank for permitted roles and denies unrelated roles', async () => {
     const questionRoute = adaptiveLearningRoutes.find((route) => route.path === 'question-bank');
